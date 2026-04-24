@@ -51,7 +51,12 @@ from app.services.profile_actions import (
     get_saved_profiles,
 )
 from app.services.profile_cards import send_profile_card
-from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
+from app.services.telegram_api import (
+    enforce_callback_rate_limit,
+    safe_answer,
+    safe_callback_answer,
+    safe_edit_text,
+)
 from app.services.users import get_or_create_user
 from app.states.client import ClientFlow
 
@@ -91,12 +96,16 @@ async def ensure_browse_access(message: Message, db: Database) -> bool:
 
 async def ensure_browse_access_callback(callback: CallbackQuery, db: Database) -> bool:
     if callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
+        return False
+
+    if not await enforce_callback_rate_limit(callback):
         return False
 
     user = await get_client_user(callback.from_user, db)
     if user is None or not can_browse_profiles(user.role):
-        await callback.answer(
+        await safe_callback_answer(
+            callback,
             "Доступно только для ролей Художник и Заказчик.",
             show_alert=True,
         )
@@ -337,7 +346,7 @@ async def find_artists_callback(callback: CallbackQuery, db: Database) -> None:
 @router.callback_query(F.data.startswith(LIKE_PROFILE_CALLBACK_PREFIX))
 async def like_profile_callback(callback: CallbackQuery, db: Database) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -347,13 +356,13 @@ async def like_profile_callback(callback: CallbackQuery, db: Database) -> None:
         user, _ = await get_or_create_user(session, callback.from_user)
         created = await add_like(session, user.id, profile_id)
 
-    await callback.answer("Лайк сохранён." if created else "Вы уже лайкали эту анкету.")
+    await safe_callback_answer(callback, "Лайк сохранён." if created else "Вы уже лайкали эту анкету.")
 
 
 @router.callback_query(F.data.startswith(SAVE_PROFILE_CALLBACK_PREFIX))
 async def save_profile_callback(callback: CallbackQuery, db: Database) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -363,7 +372,8 @@ async def save_profile_callback(callback: CallbackQuery, db: Database) -> None:
         user, _ = await get_or_create_user(session, callback.from_user)
         created = await add_save(session, user.id, profile_id)
 
-    await callback.answer(
+    await safe_callback_answer(
+        callback,
         "Анкета сохранена." if created else "Эта анкета уже в сохранённых."
     )
     await send_next_artist_profile(callback.message, callback.from_user, db)
@@ -372,7 +382,7 @@ async def save_profile_callback(callback: CallbackQuery, db: Database) -> None:
 @router.callback_query(F.data.startswith(CONTACT_PROFILE_CALLBACK_PREFIX))
 async def contact_profile_callback(callback: CallbackQuery, db: Database) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -382,7 +392,7 @@ async def contact_profile_callback(callback: CallbackQuery, db: Database) -> Non
         user, _ = await get_or_create_user(session, callback.from_user)
         profile = await get_profile_by_id(session, profile_id)
         if profile is None:
-            await callback.answer("Анкета не найдена.", show_alert=True)
+            await safe_callback_answer(callback, "Анкета не найдена.", show_alert=True)
             return
         await add_contact(session, user.id, profile_id)
 
@@ -393,8 +403,9 @@ async def contact_profile_callback(callback: CallbackQuery, db: Database) -> Non
         else (profile.contacts_text or "Не указано")
     )
 
-    await callback.answer()
-    await callback.message.answer(
+    await safe_callback_answer(callback)
+    await safe_answer(
+        callback.message,
         f"<b>Контакт художника:</b>\n{escape(contact_value)}"
     )
 
@@ -406,7 +417,7 @@ async def saved_profile_prev_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -418,14 +429,14 @@ async def saved_profile_prev_callback(
 
     if not profiles:
         await delete_saved_view_messages(callback.message, state)
-        await callback.answer()
-        await callback.message.answer("У вас пока нет сохраненных анкет.")
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, "У вас пока нет сохраненных анкет.")
         return
 
     current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
     prev_index = (current_index - 1) % len(profiles)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_saved_profile(
         callback.message,
         state,
@@ -442,7 +453,7 @@ async def saved_profile_next_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -454,14 +465,14 @@ async def saved_profile_next_callback(
 
     if not profiles:
         await delete_saved_view_messages(callback.message, state)
-        await callback.answer()
-        await callback.message.answer("У вас пока нет сохраненных анкет.")
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, "У вас пока нет сохраненных анкет.")
         return
 
     current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
     next_index = (current_index + 1) % len(profiles)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_saved_profile(
         callback.message,
         state,
@@ -478,7 +489,7 @@ async def saved_profile_delete_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -492,18 +503,18 @@ async def saved_profile_delete_callback(
         profiles = await get_saved_profiles(session, user.id)
 
     if not removed:
-        await callback.answer("Эта анкета уже удалена из сохранённых.")
+        await safe_callback_answer(callback, "Эта анкета уже удалена из сохранённых.")
         if profiles:
             await show_saved_profile(callback.message, state, profiles[0], 1, len(profiles))
         else:
             await delete_saved_view_messages(callback.message, state)
-            await callback.message.answer("У вас пока нет сохраненных анкет.")
+            await safe_answer(callback.message, "У вас пока нет сохраненных анкет.")
         return
 
-    await callback.answer("Анкета удалена из сохранённых.")
+    await safe_callback_answer(callback, "Анкета удалена из сохранённых.")
     if not profiles:
         await delete_saved_view_messages(callback.message, state)
-        await callback.message.answer("У вас пока нет сохраненных анкет.")
+        await safe_answer(callback.message, "У вас пока нет сохраненных анкет.")
         return
 
     removed_index = next(
@@ -524,7 +535,7 @@ async def saved_profile_delete_callback(
 @router.callback_query(F.data.startswith(SKIP_PROFILE_CALLBACK_PREFIX))
 async def skip_profile_callback(callback: CallbackQuery, db: Database) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -534,7 +545,7 @@ async def skip_profile_callback(callback: CallbackQuery, db: Database) -> None:
         user, _ = await get_or_create_user(session, callback.from_user)
         await add_skip(session, user.id, profile_id)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await send_next_artist_profile(callback.message, callback.from_user, db)
 
 
@@ -545,7 +556,7 @@ async def complain_profile_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_browse_access_callback(callback, db):
         return
@@ -555,13 +566,13 @@ async def complain_profile_callback(
         user, _ = await get_or_create_user(session, callback.from_user)
         profile = await get_profile_by_id(session, profile_id)
         if profile is None:
-            await callback.answer("Анкета не найдена.", show_alert=True)
+            await safe_callback_answer(callback, "Анкета не найдена.", show_alert=True)
             return
 
     await state.set_state(ClientFlow.waiting_for_complaint_reason)
     await state.update_data(complaint_profile_id=profile_id)
-    await callback.answer()
-    await callback.message.answer("Напишите причину жалобы одним сообщением.")
+    await safe_callback_answer(callback)
+    await safe_answer(callback.message, "Напишите причину жалобы одним сообщением.")
 
 
 @router.callback_query(
@@ -632,31 +643,32 @@ async def complaint_reason_message(
     db: Database,
 ) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     reason = message.text.strip()
     if not reason:
-        await message.answer("Причина жалобы не должна быть пустой.")
+        await safe_answer(message, "Причина жалобы не должна быть пустой.")
         return
 
     data = await state.get_data()
     profile_id = data.get("complaint_profile_id")
     if not isinstance(profile_id, int):
         await state.clear()
-        await message.answer("Не удалось определить анкету для жалобы.")
+        await safe_answer(message, "Не удалось определить анкету для жалобы.")
         return
 
     async with db.session() as session:
         user, _ = await get_or_create_user(session, message.from_user)
         if user is None or not can_browse_profiles(user.role):
-            await message.answer(browse_access_denied_text())
+            await safe_answer(message, browse_access_denied_text())
             await state.clear()
             return
         created = await add_complaint(session, user.id, profile_id, reason)
 
     await state.clear()
-    await message.answer(
+    await safe_answer(
+        message,
         "Жалоба отправлена." if created else "Вы уже жаловались на эту анкету."
     )
     await send_next_artist_profile(message, message.from_user, db)
@@ -664,7 +676,7 @@ async def complaint_reason_message(
 
 @router.message(ClientFlow.waiting_for_complaint_reason)
 async def invalid_complaint_reason(message: Message) -> None:
-    await message.answer("Отправьте причину жалобы текстом одним сообщением.")
+    await safe_answer(message, "Отправьте причину жалобы текстом одним сообщением.")
 
 
 @router.message(F.text == SET_FILTERS_BUTTON)
@@ -685,4 +697,4 @@ async def saved_profiles_button(message: Message, db: Database, state: FSMContex
 @router.callback_query(ClientFlow.waiting_for_deadline_category)
 @router.callback_query(ClientFlow.waiting_for_format)
 async def invalid_client_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Выберите вариант кнопкой ниже.", show_alert=True)
+    await safe_callback_answer(callback, "Выберите вариант кнопкой ниже.", show_alert=True)

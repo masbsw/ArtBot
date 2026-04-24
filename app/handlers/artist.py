@@ -35,7 +35,12 @@ from app.services.artist_profiles import (
     upsert_artist_profile,
 )
 from app.services.profile_cards import send_profile_card
-from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
+from app.services.telegram_api import (
+    enforce_callback_rate_limit,
+    safe_answer,
+    safe_callback_answer,
+    safe_edit_text,
+)
 from app.services.users import get_user_by_telegram_id
 from app.states.artist import ArtistFlow
 
@@ -69,12 +74,15 @@ async def ensure_artist_access(message: Message, db: Database) -> bool:
 
 async def ensure_artist_access_callback(callback: CallbackQuery, db: Database) -> bool:
     if callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
+        return False
+
+    if not await enforce_callback_rate_limit(callback):
         return False
 
     user = await get_artist_user(callback.from_user, db)
     if user is None or user.role != UserRole.ARTIST:
-        await callback.answer("Доступно только для роли Художник.", show_alert=True)
+        await safe_callback_answer(callback, "Доступно только для роли Художник.", show_alert=True)
         return False
     return True
 
@@ -646,7 +654,7 @@ async def set_contacts_text(
 
 @router.callback_query(ArtistFlow.waiting_for_edit_field)
 async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Выберите поле кнопкой ниже.", show_alert=True)
+    await safe_callback_answer(callback, "Выберите поле кнопкой ниже.", show_alert=True)
 
 
 @router.message(ArtistFlow.waiting_for_description)
@@ -659,4 +667,4 @@ async def invalid_text_input(message: Message) -> None:
 @router.callback_query(ArtistFlow.waiting_for_currency)
 @router.callback_query(ArtistFlow.waiting_for_deadline_category)
 async def invalid_option_callback(callback: CallbackQuery) -> None:
-    await callback.answer("Выберите вариант кнопкой ниже.", show_alert=True)
+    await safe_callback_answer(callback, "Выберите вариант кнопкой ниже.", show_alert=True)

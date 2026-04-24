@@ -17,7 +17,12 @@ from app.keyboards.start import (
 )
 from app.services.artist_profiles import get_artist_profile
 from app.services.client_filters import get_client_filter
-from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
+from app.services.telegram_api import (
+    enforce_callback_rate_limit,
+    safe_answer,
+    safe_callback_answer,
+    safe_edit_text,
+)
 from app.services.users import ROLE_TITLES, get_or_create_user, get_user_by_telegram_id, set_user_role
 
 router = Router(name="start")
@@ -132,6 +137,8 @@ async def change_role_callback(
     if callback.from_user is None or callback.message is None:
         await safe_callback_answer(callback)
         return
+    if not await enforce_callback_rate_limit(callback):
+        return
 
     async with db.session() as session:
         user, _ = await get_or_create_user(
@@ -157,6 +164,8 @@ async def set_role_callback(
 ) -> None:
     if callback.from_user is None or callback.message is None or callback.data is None:
         await safe_callback_answer(callback)
+        return
+    if not await enforce_callback_rate_limit(callback):
         return
 
     role_value = callback.data.removeprefix(ROLE_CALLBACK_PREFIX)

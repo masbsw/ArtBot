@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramNetworkError
 from app.config import Settings, get_settings
 from app.db.session import Database
 from app.handlers import admin, artist, client, start
+from app.middlewares.performance import SlowUpdateLoggingMiddleware
 
 logger = logging.getLogger(__name__)
 GET_ME_RETRY_DELAYS = (2, 4, 8, 16)
@@ -25,6 +26,7 @@ def configure_logging(level: str) -> None:
 
 def setup_dispatcher() -> Dispatcher:
     dispatcher = Dispatcher()
+    dispatcher.update.outer_middleware(SlowUpdateLoggingMiddleware())
     dispatcher.include_router(start.router)
     dispatcher.include_router(artist.router)
     dispatcher.include_router(client.router)

@@ -1,3 +1,4 @@
+import asyncio
 from html import escape
 
 from aiogram import F, Router
@@ -43,6 +44,7 @@ from app.services.admin_profiles import (
 )
 from app.services.profile_cards import send_profile_card
 from app.services.telegram_api import (
+    enforce_callback_rate_limit,
     safe_answer,
     safe_callback_answer,
     safe_edit_text,
@@ -53,6 +55,8 @@ from app.states.admin import AdminFlow
 router = Router(name="admin")
 
 ADMIN_VIEW_MESSAGE_IDS_KEY = "admin_view_message_ids"
+BROADCAST_BATCH_SIZE = 20
+BROADCAST_BATCH_DELAY_SECONDS = 1
 
 
 def is_admin(telegram_id: int, settings: Settings) -> bool:
@@ -73,8 +77,13 @@ async def ensure_admin_callback(
     callback: CallbackQuery,
     settings: Settings,
 ) -> bool:
-    if callback.from_user is None or not is_admin(callback.from_user.id, settings):
-        await callback.answer("Доступ только для администраторов.", show_alert=True)
+    if callback.from_user is None:
+        await safe_callback_answer(callback)
+        return False
+    if not await enforce_callback_rate_limit(callback):
+        return False
+    if not is_admin(callback.from_user.id, settings):
+        await safe_callback_answer(callback, "Доступ только для администраторов.", show_alert=True)
         return False
     return True
 
@@ -324,7 +333,7 @@ async def admin_nav_next_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
@@ -361,7 +370,7 @@ async def admin_complaints_view_callback(
     settings: Settings,
 ) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
@@ -471,7 +480,7 @@ async def restore_profile_callback(
     profile_id = int(callback.data.removeprefix(ADMIN_RESTORE_PROFILE_PREFIX))
     async with db.session() as session:
         success = await restore_profile(session, profile_id)
-    await callback.answer("Анкета восстановлена." if success else "Анкета не найдена.")
+    await safe_callback_answer(callback, "Анкета восстановлена." if success else "Анкета не найдена.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_DELETE_PROFILE_PREFIX))
@@ -485,7 +494,7 @@ async def delete_profile_callback(
     profile_id = int(callback.data.removeprefix(ADMIN_DELETE_PROFILE_PREFIX))
     async with db.session() as session:
         success = await delete_profile(session, profile_id)
-    await callback.answer("Анкета удалена." if success else "Анкета не найдена.")
+    await safe_callback_answer(callback, "Анкета удалена." if success else "Анкета не найдена.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_BLOCK_USER_PREFIX))
@@ -499,7 +508,8 @@ async def block_user_callback(
     user_id = int(callback.data.removeprefix(ADMIN_BLOCK_USER_PREFIX))
     async with db.session() as session:
         success = await set_user_blocked(session, user_id, True)
-    await callback.answer(
+    await safe_callback_answer(
+        callback,
         "Пользователь заблокирован." if success else "Пользователь не найден."
     )
 
@@ -515,7 +525,8 @@ async def unblock_user_callback(
     user_id = int(callback.data.removeprefix(ADMIN_UNBLOCK_USER_PREFIX))
     async with db.session() as session:
         success = await set_user_blocked(session, user_id, False)
-    await callback.answer(
+    await safe_callback_answer(
+        callback,
         "Пользователь разблокирован." if success else "Пользователь не найден."
     )
 
@@ -591,7 +602,7 @@ async def broadcast_confirm_callback(
 
     success_count = 0
     failed_count = 0
-    for telegram_id in telegram_ids:
+    for index, telegram_id in enumerate(telegram_ids, start=1):
         try:
             sent = await safe_send_message(callback.bot, telegram_id, broadcast_text)
             if sent is not None:
@@ -602,6 +613,8 @@ async def broadcast_confirm_callback(
             failed_count += 1
         except Exception:
             failed_count += 1
+        if index % BROADCAST_BATCH_SIZE == 0 and index < len(telegram_ids):
+            await asyncio.sleep(BROADCAST_BATCH_DELAY_SECONDS)
 
     await state.clear()
     await safe_callback_answer(callback)

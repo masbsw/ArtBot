@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from time import monotonic
 from typing import Any, TypeVar
 
 from aiogram import Bot
@@ -12,6 +13,11 @@ MediaGroupItem = InputMediaAudio | InputMediaDocument | InputMediaPhoto | InputM
 
 logger = logging.getLogger(__name__)
 RETRY_DELAYS = (1, 2, 3)
+TELEGRAM_API_CONCURRENCY_LIMIT = 5
+CALLBACK_MIN_INTERVAL_SECONDS = 1.5
+telegram_api_semaphore = asyncio.Semaphore(TELEGRAM_API_CONCURRENCY_LIMIT)
+_callback_rate_limit_lock = asyncio.Lock()
+_callback_last_pressed_at: dict[int, float] = {}
 
 
 async def retry_telegram_request(
@@ -22,7 +28,8 @@ async def retry_telegram_request(
 ) -> RetryResultT | None:
     for attempt in range(1, len(RETRY_DELAYS) + 2):
         try:
-            return await request(*args, **kwargs)
+            async with telegram_api_semaphore:
+                return await request(*args, **kwargs)
         except TelegramNetworkError:
             if attempt > len(RETRY_DELAYS):
                 logger.exception(
@@ -40,6 +47,46 @@ async def retry_telegram_request(
                 delay,
             )
             await asyncio.sleep(delay)
+
+
+async def check_callback_rate_limit(
+    callback: CallbackQuery,
+    min_interval_seconds: float = CALLBACK_MIN_INTERVAL_SECONDS,
+) -> bool:
+    if callback.from_user is None:
+        return True
+
+    now = monotonic()
+    async with _callback_rate_limit_lock:
+        last_pressed_at = _callback_last_pressed_at.get(callback.from_user.id)
+        if last_pressed_at is not None and now - last_pressed_at < min_interval_seconds:
+            return False
+        _callback_last_pressed_at[callback.from_user.id] = now
+        if len(_callback_last_pressed_at) > 10_000:
+            stale_before = now - 300
+            stale_user_ids = [
+                user_id
+                for user_id, pressed_at in _callback_last_pressed_at.items()
+                if pressed_at < stale_before
+            ]
+            for user_id in stale_user_ids:
+                _callback_last_pressed_at.pop(user_id, None)
+        return True
+
+
+async def enforce_callback_rate_limit(
+    callback: CallbackQuery,
+    min_interval_seconds: float = CALLBACK_MIN_INTERVAL_SECONDS,
+) -> bool:
+    allowed = await check_callback_rate_limit(callback, min_interval_seconds)
+    if allowed:
+        return True
+    await safe_callback_answer(
+        callback,
+        "Слишком часто. Попробуйте ещё раз через секунду.",
+        show_alert=False,
+    )
+    return False
 
 
 async def safe_answer(
