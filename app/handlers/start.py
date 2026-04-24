@@ -1,0 +1,209 @@
+from aiogram import F, Router
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message
+
+from app.config import Settings
+from app.db.models import User, UserRole
+from app.db.session import Database
+from app.handlers.artist import start_artist_profile_flow
+from app.handlers.client import start_client_filters_flow
+from app.keyboards.common import CHANGE_ROLE_BUTTON, role_menu_keyboard
+from app.keyboards.start import (
+    CHANGE_ROLE_CALLBACK,
+    ROLE_CALLBACK_PREFIX,
+    change_role_keyboard,
+    role_selection_keyboard,
+)
+from app.services.artist_profiles import get_artist_profile
+from app.services.client_filters import get_client_filter
+from app.services.users import ROLE_TITLES, get_or_create_user, get_user_by_telegram_id, set_user_role
+
+router = Router(name="start")
+
+
+def is_admin_user(telegram_id: int, settings: Settings) -> bool:
+    return telegram_id in settings.admin_ids
+
+
+def build_role_prompt(user: User, created: bool) -> str:
+    if created:
+        return "Выберите роль. Позже ее можно будет изменить."
+    return (
+        f"Ваш текущий режим: <b>{ROLE_TITLES[user.role]}</b>.\n\n"
+        "При необходимости роль можно сменить:"
+    )
+
+
+async def send_role_selector(message: Message, user: User, created: bool) -> None:
+    await message.answer(
+        build_role_prompt(user, created),
+        reply_markup=role_selection_keyboard(None if created else user.role),
+    )
+
+
+async def send_role_home(message: Message, user: User) -> None:
+    text = f"Текущая роль: <b>{ROLE_TITLES[user.role]}</b>"
+    await message.answer(text, reply_markup=role_menu_keyboard(user.role))
+
+
+async def continue_role_onboarding(
+    message: Message,
+    user: User,
+    db: Database,
+) -> str:
+    async with db.session() as session:
+        fresh_user = await get_user_by_telegram_id(session, user.telegram_id)
+        if fresh_user is None:
+            await message.answer("Не удалось определить пользователя Telegram.")
+            return "missing"
+
+        if fresh_user.role == UserRole.ARTIST:
+            profile = await get_artist_profile(session, fresh_user.id)
+            if profile is None:
+                return "artist_onboarding"
+
+        if fresh_user.role == UserRole.CLIENT:
+            client_filter = await get_client_filter(session, fresh_user.id)
+            if client_filter is None:
+                return "client_onboarding"
+
+        return "home"
+
+
+@router.message(CommandStart())
+async def start_command(
+    message: Message,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя Telegram.")
+        return
+
+    async with db.session() as session:
+        user, created = await get_or_create_user(
+            session=session,
+            telegram_user=message.from_user,
+            is_admin=is_admin_user(message.from_user.id, settings),
+        )
+
+    if created or user.role == UserRole.ADMIN:
+        await send_role_selector(message, user, created)
+        return
+
+    await send_role_home(message, user)
+
+
+@router.message(Command("role"))
+async def role_command(message: Message, db: Database, settings: Settings) -> None:
+    if message.from_user is None:
+        await message.answer("Не удалось определить пользователя Telegram.")
+        return
+
+    async with db.session() as session:
+        user, _ = await get_or_create_user(
+            session=session,
+            telegram_user=message.from_user,
+            is_admin=is_admin_user(message.from_user.id, settings),
+        )
+
+    await message.answer(
+        "Выберите роль:",
+        reply_markup=role_selection_keyboard(user.role),
+    )
+
+
+@router.message(F.text == CHANGE_ROLE_BUTTON)
+async def change_role_button(message: Message, db: Database, settings: Settings) -> None:
+    await role_command(message, db, settings)
+
+
+@router.callback_query(F.data == CHANGE_ROLE_CALLBACK)
+async def change_role_callback(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+
+    async with db.session() as session:
+        user, _ = await get_or_create_user(
+            session=session,
+            telegram_user=callback.from_user,
+            is_admin=is_admin_user(callback.from_user.id, settings),
+        )
+
+    await callback.message.edit_text(
+        "Выберите новую роль:",
+        reply_markup=role_selection_keyboard(user.role),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(ROLE_CALLBACK_PREFIX))
+async def set_role_callback(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if callback.from_user is None or callback.message is None or callback.data is None:
+        await callback.answer()
+        return
+
+    role_value = callback.data.removeprefix(ROLE_CALLBACK_PREFIX)
+    role = UserRole(role_value)
+
+    async with db.session() as session:
+        user = await get_user_by_telegram_id(session, callback.from_user.id)
+        if user is None:
+            user, _ = await get_or_create_user(
+                session=session,
+                telegram_user=callback.from_user,
+                is_admin=False,
+            )
+        user = await set_user_role(session, user, role)
+
+    await callback.answer()
+    result = await continue_role_onboarding(
+        callback.message,
+        user,
+        db,
+    )
+    if result == "artist_onboarding":
+        await callback.message.edit_text(
+            "Роль сохранена: <b>Художник</b>. Теперь создадим вашу анкету 👇",
+            reply_markup=change_role_keyboard(),
+        )
+        await start_artist_profile_flow(
+            callback.message,
+            state,
+            actor_telegram_id=callback.from_user.id,
+        )
+        return
+    if result == "client_onboarding":
+        await callback.message.edit_text(
+            "Роль сохранена: <b>Заказчик</b>. Теперь настроим фильтры для поиска 👇",
+            reply_markup=change_role_keyboard(),
+        )
+        await start_client_filters_flow(callback.message, state)
+        return
+    if result == "home":
+        await callback.message.edit_text(
+            f"Роль сохранена: <b>{ROLE_TITLES[user.role]}</b>",
+            reply_markup=change_role_keyboard(),
+        )
+        await callback.message.answer(
+            f"Текущая роль: <b>{ROLE_TITLES[user.role]}</b>",
+            reply_markup=role_menu_keyboard(user.role),
+        )
+        return
+
+    await callback.message.edit_text(
+        f"Роль сохранена: <b>{ROLE_TITLES[user.role]}</b>",
+        reply_markup=change_role_keyboard(),
+    )
