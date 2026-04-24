@@ -35,6 +35,7 @@ from app.services.artist_profiles import (
     upsert_artist_profile,
 )
 from app.services.profile_cards import send_profile_card
+from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
 from app.services.users import get_user_by_telegram_id
 from app.states.artist import ArtistFlow
 
@@ -56,12 +57,12 @@ async def get_artist_user(message_user, db: Database):
 
 async def ensure_artist_access(message: Message, db: Database) -> bool:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return False
 
     user = await get_artist_user(message.from_user, db)
     if user is None or user.role != UserRole.ARTIST:
-        await message.answer(artist_access_denied_text())
+        await safe_answer(message, artist_access_denied_text())
         return False
     return True
 
@@ -90,7 +91,8 @@ async def start_artist_profile_flow(
         actor_telegram_id=actor_telegram_id,
     )
     await state.set_state(ArtistFlow.waiting_for_format)
-    await target.answer(
+    await safe_answer(
+        target,
         "Шаг 1 из 7. Выберите формат работы:",
         reply_markup=format_keyboard(),
     )
@@ -106,14 +108,15 @@ async def prompt_portfolio_step(target: Message | CallbackQuery, state: FSMConte
         "Когда закончите, нажмите кнопку <b>Готово</b>."
     )
     if isinstance(target, CallbackQuery) and target.message is not None:
-        await target.message.answer(text, reply_markup=portfolio_finish_keyboard())
+        await safe_answer(target.message, text, reply_markup=portfolio_finish_keyboard())
     else:
-        await target.answer(text, reply_markup=portfolio_finish_keyboard())
+        await safe_answer(target, text, reply_markup=portfolio_finish_keyboard())
 
 
 async def prompt_description_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_description)
-    await message.answer(
+    await safe_answer(
+        message,
         "Шаг 3 из 7. Напишите краткое описание себя и услуг.",
         reply_markup=remove_reply_keyboard(),
     )
@@ -121,7 +124,8 @@ async def prompt_description_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_currency_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_currency)
-    await message.answer(
+    await safe_answer(
+        message,
         "Шаг 4 из 7. Выберите валюту:",
         reply_markup=currency_keyboard(),
     )
@@ -129,7 +133,8 @@ async def prompt_currency_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_price_text)
-    await message.answer(
+    await safe_answer(
+        message,
         "Шаг 5 из 7. Укажите цену в свободной форме.\n"
         "В анкете она будет показана как: ваш текст (валюта)."
     )
@@ -137,7 +142,8 @@ async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_deadline_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_deadline_category)
-    await message.answer(
+    await safe_answer(
+        message,
         "Шаг 6 из 7. Выберите категорию сроков:",
         reply_markup=deadline_category_keyboard(),
     )
@@ -145,7 +151,8 @@ async def prompt_deadline_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_contacts_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_contacts_text)
-    await message.answer(
+    await safe_answer(
+        message,
         "Шаг 7 из 7. Отправьте контакты текстом без ссылок на сайты.",
     )
 
@@ -175,7 +182,8 @@ def build_artist_form_data(
 
 
 async def send_artist_menu_after_edit(message: Message) -> None:
-    await message.answer(
+    await safe_answer(
+        message,
         "Что дальше?",
         reply_markup=role_menu_keyboard(UserRole.ARTIST),
     )
@@ -191,13 +199,13 @@ async def finish_artist_profile_update(
     if actor_telegram_id is None and message.from_user is not None:
         actor_telegram_id = message.from_user.id
     if actor_telegram_id is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
         user = await get_user_by_telegram_id(session, actor_telegram_id)
         if user is None or user.role != UserRole.ARTIST:
-            await message.answer(artist_access_denied_text())
+            await safe_answer(message, artist_access_denied_text())
             await state.clear()
             return
 
@@ -220,18 +228,18 @@ async def start_single_field_edit(message: Message, db: Database, state: FSMCont
         return
 
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
         user = await get_user_by_telegram_id(session, message.from_user.id)
         if user is None or user.role != UserRole.ARTIST:
-            await message.answer(artist_access_denied_text())
+            await safe_answer(message, artist_access_denied_text())
             return
         profile = await get_artist_profile(session, user.id)
 
     if profile is None:
-        await message.answer("Анкета пока не заполнена. Сначала заполните её полностью.")
+        await safe_answer(message, "Анкета пока не заполнена. Сначала заполните её полностью.")
         await start_artist_profile_flow(message, state, actor_telegram_id=message.from_user.id)
         return
 
@@ -242,7 +250,8 @@ async def start_single_field_edit(message: Message, db: Database, state: FSMCont
         actor_telegram_id=message.from_user.id,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
-    await message.answer(
+    await safe_answer(
+        message,
         "Что изменить в анкете?",
         reply_markup=profile_field_selection_keyboard(),
     )
@@ -254,7 +263,7 @@ async def start_single_field_edit_callback(
     state: FSMContext,
 ) -> None:
     if callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_artist_access_callback(callback, db):
         return
@@ -262,13 +271,13 @@ async def start_single_field_edit_callback(
     async with db.session() as session:
         user = await get_user_by_telegram_id(session, callback.from_user.id)
         if user is None or user.role != UserRole.ARTIST:
-            await callback.answer("Доступно только для роли Художник.", show_alert=True)
+            await safe_callback_answer(callback, "Доступно только для роли Художник.", show_alert=True)
             return
         profile = await get_artist_profile(session, user.id)
 
     if profile is None:
-        await callback.answer()
-        await callback.message.answer("Анкета пока не заполнена. Сначала заполните её полностью.")
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, "Анкета пока не заполнена. Сначала заполните её полностью.")
         await state.clear()
         await state.update_data(
             edit_mode="full",
@@ -276,13 +285,14 @@ async def start_single_field_edit_callback(
             actor_telegram_id=callback.from_user.id,
         )
         await state.set_state(ArtistFlow.waiting_for_format)
-        await callback.message.answer(
+        await safe_answer(
+            callback.message,
             "Шаг 1 из 7. Выберите формат работы:",
             reply_markup=format_keyboard(),
         )
         return
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     await state.clear()
     await state.update_data(
         edit_mode="field",
@@ -290,7 +300,8 @@ async def start_single_field_edit_callback(
         actor_telegram_id=callback.from_user.id,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
-    await callback.message.answer(
+    await safe_answer(
+        callback.message,
         "Что изменить в анкете?",
         reply_markup=profile_field_selection_keyboard(),
     )
@@ -309,7 +320,7 @@ async def prompt_selected_field(
 
     if field_name == "format":
         await state.set_state(ArtistFlow.waiting_for_format)
-        await target_message.answer("Выберите новый формат:", reply_markup=format_keyboard())
+        await safe_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
         return
     if field_name == "portfolio":
         await state.update_data(portfolio_images=[])
@@ -317,25 +328,28 @@ async def prompt_selected_field(
         return
     if field_name == "description":
         await state.set_state(ArtistFlow.waiting_for_description)
-        await target_message.answer(
+        await safe_answer(
+            target_message,
             "Отправьте новое описание.",
             reply_markup=remove_reply_keyboard(),
         )
         return
     if field_name == "price":
         await state.set_state(ArtistFlow.waiting_for_currency)
-        await target_message.answer("Выберите валюту:", reply_markup=currency_keyboard())
+        await safe_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
         return
     if field_name == "deadline":
         await state.set_state(ArtistFlow.waiting_for_deadline_category)
-        await target_message.answer(
+        await safe_answer(
+            target_message,
             "Выберите новые сроки:",
             reply_markup=deadline_category_keyboard(),
         )
         return
     if field_name == "contacts":
         await state.set_state(ArtistFlow.waiting_for_contacts_text)
-        await target_message.answer(
+        await safe_answer(
+            target_message,
             "Отправьте новые контакты без ссылок.",
             reply_markup=remove_reply_keyboard(),
         )
@@ -343,18 +357,19 @@ async def prompt_selected_field(
 
 async def send_profile_view(message: Message, db: Database) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
         user = await get_user_by_telegram_id(session, message.from_user.id)
         if user is None or user.role != UserRole.ARTIST:
-            await message.answer(artist_access_denied_text())
+            await safe_answer(message, artist_access_denied_text())
             return
         profile = await get_artist_profile(session, user.id)
 
     if profile is None:
-        await message.answer(
+        await safe_answer(
+            message,
             "Анкета пока не заполнена. Используйте /edit_profile, чтобы создать её."
         )
         return
@@ -406,7 +421,7 @@ async def edit_profile_callback(
 ) -> None:
     if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     await start_artist_profile_flow(
         callback.message,
         state,
@@ -429,16 +444,16 @@ async def edit_profile_field_callback(
 )
 async def select_edit_field(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     field_name = callback.data.removeprefix(EDIT_FIELD_CALLBACK_PREFIX)
     if field_name not in EDITABLE_FIELD_NAMES:
-        await callback.answer("Неизвестное поле.", show_alert=True)
+        await safe_callback_answer(callback, "Неизвестное поле.", show_alert=True)
         return
 
-    await callback.answer()
-    await callback.message.edit_text("Выберите поле для редактирования:")
+    await safe_callback_answer(callback)
+    await safe_edit_text(callback.message, "Выберите поле для редактирования:")
     await prompt_selected_field(callback, state, field_name)
 
 
@@ -448,15 +463,16 @@ async def select_edit_field(callback: CallbackQuery, state: FSMContext) -> None:
 )
 async def set_artist_format(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     value = callback.data.removeprefix(FORMAT_CALLBACK_PREFIX)
     await state.update_data(format=value)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"Шаг 1 из 7. Формат выбран: <b>{value}</b>."
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
     state_data = await state.get_data()
     if state_data.get("edit_mode") == "field" and state_data.get("edit_field") == "format":
         await finish_artist_profile_update(callback.message, state, db)
@@ -470,7 +486,8 @@ async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
     image_ids = list(data.get("portfolio_images", []))
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await message.answer(
+        await safe_answer(
+            message,
             f"Можно загрузить не более {MAX_PORTFOLIO_IMAGES} изображений. Нажмите Готово."
         )
         return
@@ -480,13 +497,15 @@ async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
     await state.update_data(portfolio_images=image_ids)
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await message.answer(
+        await safe_answer(
+            message,
             f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Лимит достигнут.",
             reply_markup=portfolio_finish_keyboard(),
         )
         return
 
-    await message.answer(
+    await safe_answer(
+        message,
         f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Можно отправить ещё фото или нажать Готово.",
         reply_markup=portfolio_finish_keyboard(),
     )
@@ -498,7 +517,8 @@ async def finish_portfolio_step(message: Message, state: FSMContext, db: Databas
     image_ids = list(data.get("portfolio_images", []))
 
     if not image_ids:
-        await message.answer(
+        await safe_answer(
+            message,
             "Сначала отправьте хотя бы одно изображение для портфолио."
         )
         return
@@ -512,7 +532,8 @@ async def finish_portfolio_step(message: Message, state: FSMContext, db: Databas
 
 @router.message(ArtistFlow.waiting_for_portfolio_images)
 async def invalid_portfolio_input(message: Message) -> None:
-    await message.answer(
+    await safe_answer(
+        message,
         "На этом шаге нужно отправить фото или нажать Готово."
     )
 
@@ -521,7 +542,7 @@ async def invalid_portfolio_input(message: Message) -> None:
 async def set_description(message: Message, state: FSMContext, db: Database) -> None:
     description = message.text.strip()
     if not description:
-        await message.answer("Описание не должно быть пустым.")
+        await safe_answer(message, "Описание не должно быть пустым.")
         return
     await state.update_data(description=description)
     data = await state.get_data()
@@ -537,24 +558,25 @@ async def set_description(message: Message, state: FSMContext, db: Database) -> 
 )
 async def set_currency(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     value = callback.data.removeprefix(CURRENCY_CALLBACK_PREFIX)
     await state.update_data(currency=value)
     data = await state.get_data()
     if data.get("edit_mode") == "field" and data.get("edit_field") == "price":
-        await callback.message.edit_text(f"Валюта: <b>{value}</b>.")
-        await callback.answer()
+        await safe_edit_text(callback.message, f"Валюта: <b>{value}</b>.")
+        await safe_callback_answer(callback)
         await state.set_state(ArtistFlow.waiting_for_price_text)
-        await callback.message.answer(
+        await safe_answer(
+            callback.message,
             "Отправьте новый прайс.\n"
             "В анкете он будет показан как: ваш текст (валюта)."
         )
         return
 
-    await callback.message.edit_text(f"Шаг 4 из 7. Валюта: <b>{value}</b>.")
-    await callback.answer()
+    await safe_edit_text(callback.message, f"Шаг 4 из 7. Валюта: <b>{value}</b>.")
+    await safe_callback_answer(callback)
     await prompt_price_text_step(callback.message, state)
 
 
@@ -562,7 +584,7 @@ async def set_currency(callback: CallbackQuery, state: FSMContext, db: Database)
 async def set_price_text(message: Message, state: FSMContext, db: Database) -> None:
     price_text = message.text.strip()
     if not price_text:
-        await message.answer("Прайс не должен быть пустым.")
+        await safe_answer(message, "Прайс не должен быть пустым.")
         return
     await state.update_data(price_text=price_text)
     data = await state.get_data()
@@ -578,24 +600,26 @@ async def set_price_text(message: Message, state: FSMContext, db: Database) -> N
 )
 async def set_deadline_category(callback: CallbackQuery, state: FSMContext, db: Database) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     value = callback.data.removeprefix(DEADLINE_CALLBACK_PREFIX)
     await state.update_data(deadline_category=value)
     data = await state.get_data()
     if data.get("edit_mode") == "field" and data.get("edit_field") == "deadline":
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"Сроки: <b>{humanize_deadline_category(value)}</b>."
         )
-        await callback.answer()
+        await safe_callback_answer(callback)
         await finish_artist_profile_update(callback.message, state, db)
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"Шаг 6 из 7. Сроки: <b>{humanize_deadline_category(value)}</b>."
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
     await prompt_contacts_step(callback.message, state)
 
 
@@ -607,10 +631,11 @@ async def set_contacts_text(
 ) -> None:
     contacts_text = message.text.strip()
     if not contacts_text:
-        await message.answer("Контакты не должны быть пустыми.")
+        await safe_answer(message, "Контакты не должны быть пустыми.")
         return
     if contacts_have_links(contacts_text):
-        await message.answer(
+        await safe_answer(
+            message,
             "Контакты должны быть без ссылок на сайты. Уберите URL и домены."
         )
         return
@@ -628,7 +653,7 @@ async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
 @router.message(ArtistFlow.waiting_for_price_text)
 @router.message(ArtistFlow.waiting_for_contacts_text)
 async def invalid_text_input(message: Message) -> None:
-    await message.answer("На этом шаге ожидается текстовое сообщение.")
+    await safe_answer(message, "На этом шаге ожидается текстовое сообщение.")
 
 
 @router.callback_query(ArtistFlow.waiting_for_currency)

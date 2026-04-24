@@ -12,6 +12,11 @@ from app.services.artist_profiles import (
     humanize_deadline_category,
     humanize_format,
 )
+from app.services.telegram_api import (
+    safe_answer,
+    safe_answer_media_group,
+    safe_answer_photo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,18 +52,19 @@ async def send_profile_card(
     ]
 
     if not images:
-        sent = await message.answer(caption, reply_markup=reply_markup)
+        sent = await safe_answer(message, caption, reply_markup=reply_markup)
         logger.info(
             "send_profile_card profile_id=%s mode=text image_count=0 duration_ms=%.1f",
             profile.id,
             (perf_counter() - started_at) * 1000,
         )
-        return [sent]
+        return [sent] if sent is not None else []
 
     if len(images) == 1:
         try:
-            sent = await message.answer_photo(
-                photo=images[0].telegram_file_id,
+            sent = await safe_answer_photo(
+                message,
+                images[0].telegram_file_id,
                 caption=caption,
                 reply_markup=reply_markup,
             )
@@ -68,13 +74,13 @@ async def send_profile_card(
                 profile.id,
                 images[0].telegram_file_id,
             )
-            sent = await message.answer(caption, reply_markup=reply_markup)
+            sent = await safe_answer(message, caption, reply_markup=reply_markup)
         logger.info(
             "send_profile_card profile_id=%s mode=single image_count=1 duration_ms=%.1f",
             profile.id,
             (perf_counter() - started_at) * 1000,
         )
-        return [sent]
+        return [sent] if sent is not None else []
 
     media = []
     for index, item in enumerate(images):
@@ -89,7 +95,7 @@ async def send_profile_card(
         media.append(InputMediaPhoto(media=item.telegram_file_id))
 
     try:
-        sent_messages = list(await message.answer_media_group(media))
+        sent_messages = await safe_answer_media_group(message, media)
         mode = "media_group"
     except TelegramBadRequest:
         logger.warning(
@@ -97,17 +103,21 @@ async def send_profile_card(
             profile.id,
             len(images),
         )
-        sent_messages = [
-            await message.answer_photo(
-                photo=images[0].telegram_file_id,
-                caption=caption,
-            )
-        ]
+        fallback_message = await safe_answer_photo(
+            message,
+            images[0].telegram_file_id,
+            caption=caption,
+        )
+        sent_messages = [fallback_message] if fallback_message is not None else []
         mode = "single_fallback"
     if reply_markup is not None:
-        sent_messages.append(
-            await message.answer("Доступные действия:", reply_markup=reply_markup)
+        actions_message = await safe_answer(
+            message,
+            "Доступные действия:",
+            reply_markup=reply_markup,
         )
+        if actions_message is not None:
+            sent_messages.append(actions_message)
     logger.info(
         "send_profile_card profile_id=%s mode=%s image_count=%s duration_ms=%.1f",
         profile.id,

@@ -51,6 +51,7 @@ from app.services.profile_actions import (
     get_saved_profiles,
 )
 from app.services.profile_cards import send_profile_card
+from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
 from app.services.users import get_or_create_user
 from app.states.client import ClientFlow
 
@@ -78,12 +79,12 @@ def can_browse_profiles(role: UserRole) -> bool:
 
 async def ensure_browse_access(message: Message, db: Database) -> bool:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return False
 
     user = await get_client_user(message.from_user, db)
     if user is None or not can_browse_profiles(user.role):
-        await message.answer(browse_access_denied_text())
+        await safe_answer(message, browse_access_denied_text())
         return False
     return True
 
@@ -114,14 +115,16 @@ def build_filters_text(client_filter) -> str:
 async def start_client_filters_flow(target: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(ClientFlow.waiting_for_format)
-    await target.answer(
+    await safe_answer(
+        target,
         "Шаг 1 из 2. Выберите нужный формат:",
         reply_markup=client_format_keyboard(),
     )
 
 
 async def send_client_menu_after_filters(message: Message) -> None:
-    await message.answer(
+    await safe_answer(
+        message,
         "Что дальше?",
         reply_markup=role_menu_keyboard(UserRole.CLIENT),
     )
@@ -129,24 +132,26 @@ async def send_client_menu_after_filters(message: Message) -> None:
 
 async def send_client_filters_view(message: Message, db: Database) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
         user, _ = await get_or_create_user(session, message.from_user)
         if user is None or not can_browse_profiles(user.role):
-            await message.answer(browse_access_denied_text())
+            await safe_answer(message, browse_access_denied_text())
             return
         client_filter = await get_client_filter(session, user.id)
 
     if client_filter is None:
-        await message.answer(
+        await safe_answer(
+            message,
             "Фильтры пока не настроены. Используйте /edit_filters.",
             reply_markup=client_filters_actions_keyboard(),
         )
         return
 
-    await message.answer(
+    await safe_answer(
+        message,
         build_filters_text(client_filter),
         reply_markup=client_filters_actions_keyboard(),
     )
@@ -158,18 +163,19 @@ async def run_artist_search(
     db: Database,
 ) -> bool:
     if telegram_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return False
 
     async with db.session() as session:
         user, _ = await get_or_create_user(session, telegram_user)
         if user is None or not can_browse_profiles(user.role):
-            await message.answer(browse_access_denied_text())
+            await safe_answer(message, browse_access_denied_text())
             return False
 
         client_filter = await get_client_filter(session, user.id)
         if client_filter is None:
-            await message.answer(
+            await safe_answer(
+                message,
                 "Сначала настройте фильтры. Нажмите «⚙️ Настроить фильтры» или используйте /edit_filters.",
                 reply_markup=client_filters_actions_keyboard(),
             )
@@ -178,11 +184,11 @@ async def run_artist_search(
         profile, reset_circle = await get_next_artist_profile(session, user.id, client_filter)
 
     if profile is None:
-        await message.answer("По этим фильтрам анкеты пока не найдены.")
+        await safe_answer(message, "По этим фильтрам анкеты пока не найдены.")
         return False
 
     if reset_circle:
-        await message.answer("Вы просмотрели все подходящие анкеты. Показываю круг заново.")
+        await safe_answer(message, "Вы просмотрели все подходящие анкеты. Показываю круг заново.")
 
     await send_profile_card(
         message,
@@ -248,14 +254,14 @@ async def send_saved_profile_by_id(
     async with db.session() as session:
         user, _ = await get_or_create_user(session, telegram_user)
         if user is None or not can_browse_profiles(user.role):
-            await message.answer(browse_access_denied_text())
+            await safe_answer(message, browse_access_denied_text())
             return False
 
         profiles = await get_saved_profiles(session, user.id)
 
     if not profiles:
         await delete_saved_view_messages(message, state)
-        await message.answer("У вас пока нет сохраненных анкет.")
+        await safe_answer(message, "У вас пока нет сохраненных анкет.")
         return False
 
     profile = next((item for item in profiles if item.id == profile_id), None)
@@ -290,19 +296,19 @@ async def find_artists_command(message: Message, db: Database) -> None:
 @router.message(Command("saved_profiles"))
 async def saved_profiles_command(message: Message, db: Database, state: FSMContext) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
         user, _ = await get_or_create_user(session, message.from_user)
         if user is None or not can_browse_profiles(user.role):
-            await message.answer(browse_access_denied_text())
+            await safe_answer(message, browse_access_denied_text())
             return
         profiles = await get_saved_profiles(session, user.id)
 
     if not profiles:
         await delete_saved_view_messages(message, state)
-        await message.answer("У вас пока нет сохраненных анкет.")
+        await safe_answer(message, "У вас пока нет сохраненных анкет.")
         return
 
     await show_saved_profile(message, state, profiles[0], 1, len(profiles))
@@ -316,7 +322,7 @@ async def edit_filters_callback(
 ) -> None:
     if callback.message is None or not await ensure_browse_access_callback(callback, db):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     await start_client_filters_flow(callback.message, state)
 
 
@@ -324,7 +330,7 @@ async def edit_filters_callback(
 async def find_artists_callback(callback: CallbackQuery, db: Database) -> None:
     if callback.message is None or not await ensure_browse_access_callback(callback, db):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     await run_artist_search(callback.message, callback.from_user, db)
 
 
@@ -564,15 +570,16 @@ async def complain_profile_callback(
 )
 async def set_client_format(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     value = callback.data.removeprefix(CLIENT_FORMAT_CALLBACK_PREFIX)
     await state.update_data(format=value)
-    await callback.message.edit_text(f"Шаг 1 из 2. Формат: <b>{escape(value)}</b>.")
-    await callback.answer()
+    await safe_edit_text(callback.message, f"Шаг 1 из 2. Формат: <b>{escape(value)}</b>.")
+    await safe_callback_answer(callback)
     await state.set_state(ClientFlow.waiting_for_deadline_category)
-    await callback.message.answer(
+    await safe_answer(
+        callback.message,
         "Шаг 2 из 2. Выберите категорию сроков:",
         reply_markup=client_deadline_keyboard(),
     )
@@ -588,12 +595,13 @@ async def set_client_deadline(
     db: Database,
 ) -> None:
     if callback.data is None or callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     value = callback.data.removeprefix(CLIENT_DEADLINE_CALLBACK_PREFIX)
     await state.update_data(deadline_category=value)
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"Шаг 2 из 2. Сроки: <b>{escape(humanize_deadline_category(value))}</b>."
     )
     data = await state.get_data()
@@ -601,15 +609,16 @@ async def set_client_deadline(
     async with db.session() as session:
         user, _ = await get_or_create_user(session, callback.from_user)
         if user is None or not can_browse_profiles(user.role):
-            await callback.message.answer(browse_access_denied_text())
+            await safe_answer(callback.message, browse_access_denied_text())
             await state.clear()
-            await callback.answer()
+            await safe_callback_answer(callback)
             return
         client_filter = await upsert_client_filter(session, user.id, data)
 
     await state.clear()
-    await callback.answer("Фильтры сохранены.")
-    await callback.message.answer(
+    await safe_callback_answer(callback, "Фильтры сохранены.")
+    await safe_answer(
+        callback.message,
         build_filters_text(client_filter),
         reply_markup=client_filters_actions_keyboard(),
     )

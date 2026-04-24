@@ -17,6 +17,7 @@ from app.keyboards.start import (
 )
 from app.services.artist_profiles import get_artist_profile
 from app.services.client_filters import get_client_filter
+from app.services.telegram_api import safe_answer, safe_callback_answer, safe_edit_text
 from app.services.users import ROLE_TITLES, get_or_create_user, get_user_by_telegram_id, set_user_role
 
 router = Router(name="start")
@@ -36,7 +37,8 @@ def build_role_prompt(user: User, created: bool) -> str:
 
 
 async def send_role_selector(message: Message, user: User, created: bool) -> None:
-    await message.answer(
+    await safe_answer(
+        message,
         build_role_prompt(user, created),
         reply_markup=role_selection_keyboard(None if created else user.role),
     )
@@ -44,7 +46,7 @@ async def send_role_selector(message: Message, user: User, created: bool) -> Non
 
 async def send_role_home(message: Message, user: User) -> None:
     text = f"Текущая роль: <b>{ROLE_TITLES[user.role]}</b>"
-    await message.answer(text, reply_markup=role_menu_keyboard(user.role))
+    await safe_answer(message, text, reply_markup=role_menu_keyboard(user.role))
 
 
 async def continue_role_onboarding(
@@ -55,7 +57,7 @@ async def continue_role_onboarding(
     async with db.session() as session:
         fresh_user = await get_user_by_telegram_id(session, user.telegram_id)
         if fresh_user is None:
-            await message.answer("Не удалось определить пользователя Telegram.")
+            await safe_answer(message, "Не удалось определить пользователя Telegram.")
             return "missing"
 
         if fresh_user.role == UserRole.ARTIST:
@@ -79,7 +81,7 @@ async def start_command(
     state: FSMContext,
 ) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
@@ -99,7 +101,7 @@ async def start_command(
 @router.message(Command("role"))
 async def role_command(message: Message, db: Database, settings: Settings) -> None:
     if message.from_user is None:
-        await message.answer("Не удалось определить пользователя Telegram.")
+        await safe_answer(message, "Не удалось определить пользователя Telegram.")
         return
 
     async with db.session() as session:
@@ -109,7 +111,8 @@ async def role_command(message: Message, db: Database, settings: Settings) -> No
             is_admin=is_admin_user(message.from_user.id, settings),
         )
 
-    await message.answer(
+    await safe_answer(
+        message,
         "Выберите роль:",
         reply_markup=role_selection_keyboard(user.role),
     )
@@ -127,7 +130,7 @@ async def change_role_callback(
     settings: Settings,
 ) -> None:
     if callback.from_user is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     async with db.session() as session:
@@ -137,11 +140,12 @@ async def change_role_callback(
             is_admin=is_admin_user(callback.from_user.id, settings),
         )
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         "Выберите новую роль:",
         reply_markup=role_selection_keyboard(user.role),
     )
-    await callback.answer()
+    await safe_callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith(ROLE_CALLBACK_PREFIX))
@@ -152,7 +156,7 @@ async def set_role_callback(
     state: FSMContext,
 ) -> None:
     if callback.from_user is None or callback.message is None or callback.data is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
 
     role_value = callback.data.removeprefix(ROLE_CALLBACK_PREFIX)
@@ -168,14 +172,15 @@ async def set_role_callback(
             )
         user = await set_user_role(session, user, role)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     result = await continue_role_onboarding(
         callback.message,
         user,
         db,
     )
     if result == "artist_onboarding":
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             "Роль сохранена: <b>Художник</b>. Теперь создадим вашу анкету 👇",
             reply_markup=change_role_keyboard(),
         )
@@ -186,24 +191,28 @@ async def set_role_callback(
         )
         return
     if result == "client_onboarding":
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             "Роль сохранена: <b>Заказчик</b>. Теперь настроим фильтры для поиска 👇",
             reply_markup=change_role_keyboard(),
         )
         await start_client_filters_flow(callback.message, state)
         return
     if result == "home":
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"Роль сохранена: <b>{ROLE_TITLES[user.role]}</b>",
             reply_markup=change_role_keyboard(),
         )
-        await callback.message.answer(
+        await safe_answer(
+            callback.message,
             f"Текущая роль: <b>{ROLE_TITLES[user.role]}</b>",
             reply_markup=role_menu_keyboard(user.role),
         )
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"Роль сохранена: <b>{ROLE_TITLES[user.role]}</b>",
         reply_markup=change_role_keyboard(),
     )

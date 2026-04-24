@@ -42,6 +42,12 @@ from app.services.admin_profiles import (
     set_user_blocked,
 )
 from app.services.profile_cards import send_profile_card
+from app.services.telegram_api import (
+    safe_answer,
+    safe_callback_answer,
+    safe_edit_text,
+    safe_send_message,
+)
 from app.states.admin import AdminFlow
 
 router = Router(name="admin")
@@ -58,7 +64,7 @@ async def ensure_admin_message(
     settings: Settings,
 ) -> bool:
     if message.from_user is None or not is_admin(message.from_user.id, settings):
-        await message.answer("Доступ только для администраторов.")
+        await safe_answer(message, "Доступ только для администраторов.")
         return False
     return True
 
@@ -136,7 +142,7 @@ async def send_admin_profiles(
 ) -> None:
     if not profiles:
         await delete_admin_view_messages(message, state)
-        await message.answer(empty_text)
+        await safe_answer(message, empty_text)
         return
     await show_admin_profile(message, state, profiles[0], scope, 1, len(profiles))
 
@@ -148,7 +154,7 @@ async def admin_panel_command(
 ) -> None:
     if not await ensure_admin_message(message, settings):
         return
-    await message.answer("Панель администратора:", reply_markup=admin_panel_keyboard())
+    await safe_answer(message, "Панель администратора:", reply_markup=admin_panel_keyboard())
 
 
 @router.message(Command("admin_profiles"))
@@ -203,7 +209,7 @@ async def broadcast_command(
         return
     await state.clear()
     await state.set_state(AdminFlow.waiting_for_broadcast)
-    await message.answer("Отправьте текст рассылки одним сообщением.")
+    await safe_answer(message, "Отправьте текст рассылки одним сообщением.")
 
 
 @router.callback_query(F.data == ADMIN_LIST_ALL_CALLBACK)
@@ -215,7 +221,7 @@ async def admin_list_all_callback(
 ) -> None:
     if callback.message is None or not await ensure_admin_callback(callback, settings):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_all_profiles(session)
     await send_admin_profiles(callback.message, profiles, "Анкет пока нет.", state, "all")
@@ -230,7 +236,7 @@ async def admin_list_hidden_callback(
 ) -> None:
     if callback.message is None or not await ensure_admin_callback(callback, settings):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_hidden_profiles(session)
     await send_admin_profiles(callback.message, profiles, "Скрытых анкет нет.", state, "hidden")
@@ -245,7 +251,7 @@ async def admin_list_complaints_callback(
 ) -> None:
     if callback.message is None or not await ensure_admin_callback(callback, settings):
         return
-    await callback.answer()
+    await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_profiles_with_complaints(session)
     await send_admin_profiles(callback.message, profiles, "Анкет с жалобами нет.", state, "complaints")
@@ -280,7 +286,7 @@ async def admin_nav_prev_callback(
     state: FSMContext,
 ) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
@@ -293,13 +299,13 @@ async def admin_nav_prev_callback(
 
     if not profiles:
         await delete_admin_view_messages(callback.message, state)
-        await callback.answer()
-        await callback.message.answer(empty_text)
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, empty_text)
         return
 
     current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
     prev_index = (current_index - 1) % len(profiles)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_admin_profile(
         callback.message,
         state,
@@ -331,13 +337,13 @@ async def admin_nav_next_callback(
 
     if not profiles:
         await delete_admin_view_messages(callback.message, state)
-        await callback.answer()
-        await callback.message.answer(empty_text)
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, empty_text)
         return
 
     current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
     next_index = (current_index + 1) % len(profiles)
-    await callback.answer()
+    await safe_callback_answer(callback)
     await show_admin_profile(
         callback.message,
         state,
@@ -366,12 +372,13 @@ async def admin_complaints_view_callback(
     async with db.session() as session:
         complaints, total_count = await list_profile_complaints(session, profile_id, offset=offset, limit=5)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     if not complaints:
-        await callback.message.answer("Жалоб на эту анкету нет.")
+        await safe_answer(callback.message, "Жалоб на эту анкету нет.")
         return
 
-    await callback.message.answer(
+    await safe_answer(
+        callback.message,
         build_complaints_text(profile_id, complaints, offset),
         reply_markup=admin_complaints_navigation_keyboard(profile_id, offset, total_count, 5),
     )
@@ -384,7 +391,7 @@ async def admin_complaints_prev_callback(
     settings: Settings,
 ) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
@@ -396,12 +403,13 @@ async def admin_complaints_prev_callback(
     async with db.session() as session:
         complaints, total_count = await list_profile_complaints(session, profile_id, offset=new_offset, limit=5)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     if not complaints:
-        await callback.message.edit_text("Жалоб на эту анкету нет.")
+        await safe_edit_text(callback.message, "Жалоб на эту анкету нет.")
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         build_complaints_text(profile_id, complaints, new_offset),
         reply_markup=admin_complaints_navigation_keyboard(profile_id, new_offset, total_count, 5),
     )
@@ -414,7 +422,7 @@ async def admin_complaints_next_callback(
     settings: Settings,
 ) -> None:
     if callback.data is None or callback.message is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
@@ -426,12 +434,13 @@ async def admin_complaints_next_callback(
     async with db.session() as session:
         complaints, total_count = await list_profile_complaints(session, profile_id, offset=new_offset, limit=5)
 
-    await callback.answer()
+    await safe_callback_answer(callback)
     if not complaints:
-        await callback.message.edit_text("Жалоб на эту анкету нет.")
+        await safe_edit_text(callback.message, "Жалоб на эту анкету нет.")
         return
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         build_complaints_text(profile_id, complaints, new_offset),
         reply_markup=admin_complaints_navigation_keyboard(profile_id, new_offset, total_count, 5),
     )
@@ -447,8 +456,8 @@ async def admin_broadcast_callback(
         return
     await state.clear()
     await state.set_state(AdminFlow.waiting_for_broadcast)
-    await callback.answer()
-    await callback.message.answer("Отправьте текст рассылки одним сообщением.")
+    await safe_callback_answer(callback)
+    await safe_answer(callback.message, "Отправьте текст рассылки одним сообщением.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_RESTORE_PROFILE_PREFIX))
@@ -522,11 +531,12 @@ async def broadcast_text_message(
         return
     broadcast_text = message.text.strip()
     if not broadcast_text:
-        await message.answer("Текст рассылки не должен быть пустым.")
+        await safe_answer(message, "Текст рассылки не должен быть пустым.")
         return
     await state.update_data(broadcast_text=broadcast_text)
     await state.set_state(AdminFlow.waiting_for_broadcast_confirm)
-    await message.answer(
+    await safe_answer(
+        message,
         f"<b>Предпросмотр рассылки:</b>\n\n{broadcast_text}",
         reply_markup=admin_broadcast_confirm_keyboard(),
     )
@@ -534,7 +544,7 @@ async def broadcast_text_message(
 
 @router.message(AdminFlow.waiting_for_broadcast)
 async def invalid_broadcast_text_message(message: Message) -> None:
-    await message.answer("Отправьте текст рассылки одним сообщением.")
+    await safe_answer(message, "Отправьте текст рассылки одним сообщением.")
 
 
 @router.callback_query(F.data == ADMIN_BROADCAST_CANCEL_CALLBACK)
@@ -546,9 +556,9 @@ async def broadcast_cancel_callback(
     if not await ensure_admin_callback(callback, settings):
         return
     await state.clear()
-    await callback.answer()
+    await safe_callback_answer(callback)
     if callback.message is not None:
-        await callback.message.answer("Рассылка отменена.")
+        await safe_answer(callback.message, "Рассылка отменена.")
 
 
 @router.callback_query(
@@ -562,7 +572,7 @@ async def broadcast_confirm_callback(
     state: FSMContext,
 ) -> None:
     if callback.message is None or callback.from_user is None:
-        await callback.answer()
+        await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         await state.clear()
@@ -572,8 +582,8 @@ async def broadcast_confirm_callback(
     broadcast_text = data.get("broadcast_text")
     if not isinstance(broadcast_text, str) or not broadcast_text.strip():
         await state.clear()
-        await callback.answer()
-        await callback.message.answer("Не найден текст рассылки. Запустите сценарий заново.")
+        await safe_callback_answer(callback)
+        await safe_answer(callback.message, "Не найден текст рассылки. Запустите сценарий заново.")
         return
 
     async with db.session() as session:
@@ -583,15 +593,19 @@ async def broadcast_confirm_callback(
     failed_count = 0
     for telegram_id in telegram_ids:
         try:
-            await callback.bot.send_message(telegram_id, broadcast_text)
-            success_count += 1
+            sent = await safe_send_message(callback.bot, telegram_id, broadcast_text)
+            if sent is not None:
+                success_count += 1
+            else:
+                failed_count += 1
         except (TelegramForbiddenError, TelegramBadRequest):
             failed_count += 1
         except Exception:
             failed_count += 1
 
     await state.clear()
-    await callback.answer()
-    await callback.message.answer(
+    await safe_callback_answer(callback)
+    await safe_answer(
+        callback.message,
         f"Рассылка завершена.\nУспешно отправлено: {success_count}\nНе удалось отправить: {failed_count}"
     )

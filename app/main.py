@@ -3,6 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from app.config import Settings, get_settings
@@ -27,8 +28,10 @@ def setup_dispatcher() -> Dispatcher:
 
 
 async def run_polling(settings: Settings) -> None:
+    session = AiohttpSession(timeout=60)
     bot = Bot(
         token=settings.bot_token,
+        session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = setup_dispatcher()
