@@ -40,6 +40,7 @@ from app.services.telegram_api import (
     safe_answer,
     safe_callback_answer,
     safe_edit_text,
+    safe_fsm_answer,
 )
 from app.services.users import get_user_by_telegram_id
 from app.states.artist import ArtistFlow
@@ -87,6 +88,10 @@ async def ensure_artist_access_callback(callback: CallbackQuery, db: Database) -
     return True
 
 
+async def state_matches(state: FSMContext, expected_state: ArtistFlow) -> bool:
+    return await state.get_state() == expected_state.state
+
+
 async def start_artist_profile_flow(
     target: Message,
     state: FSMContext,
@@ -99,7 +104,9 @@ async def start_artist_profile_flow(
         actor_telegram_id=actor_telegram_id,
     )
     await state.set_state(ArtistFlow.waiting_for_format)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_format):
+        return
+    await safe_fsm_answer(
         target,
         "Шаг 1 из 7. Выберите формат работы:",
         reply_markup=format_keyboard(),
@@ -108,6 +115,8 @@ async def start_artist_profile_flow(
 
 async def prompt_portfolio_step(target: Message | CallbackQuery, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_portfolio_images)
+    if not await state_matches(state, ArtistFlow.waiting_for_portfolio_images):
+        return
     data = await state.get_data()
     if data.get("edit_field") != "portfolio":
         await state.update_data(portfolio_images=[])
@@ -116,14 +125,16 @@ async def prompt_portfolio_step(target: Message | CallbackQuery, state: FSMConte
         "Когда закончите, нажмите кнопку <b>Готово</b>."
     )
     if isinstance(target, CallbackQuery) and target.message is not None:
-        await safe_answer(target.message, text, reply_markup=portfolio_finish_keyboard())
+        await safe_fsm_answer(target.message, text, reply_markup=portfolio_finish_keyboard())
     else:
-        await safe_answer(target, text, reply_markup=portfolio_finish_keyboard())
+        await safe_fsm_answer(target, text, reply_markup=portfolio_finish_keyboard())
 
 
 async def prompt_description_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_description)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_description):
+        return
+    await safe_fsm_answer(
         message,
         "Шаг 3 из 7. Напишите краткое описание себя и услуг.",
         reply_markup=remove_reply_keyboard(),
@@ -132,7 +143,9 @@ async def prompt_description_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_currency_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_currency)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_currency):
+        return
+    await safe_fsm_answer(
         message,
         "Шаг 4 из 7. Выберите валюту:",
         reply_markup=currency_keyboard(),
@@ -141,7 +154,9 @@ async def prompt_currency_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_price_text)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_price_text):
+        return
+    await safe_fsm_answer(
         message,
         "Шаг 5 из 7. Укажите цену в свободной форме.\n"
         "В анкете она будет показана как: ваш текст (валюта)."
@@ -150,7 +165,9 @@ async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_deadline_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_deadline_category)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_deadline_category):
+        return
+    await safe_fsm_answer(
         message,
         "Шаг 6 из 7. Выберите категорию сроков:",
         reply_markup=deadline_category_keyboard(),
@@ -159,7 +176,9 @@ async def prompt_deadline_step(message: Message, state: FSMContext) -> None:
 
 async def prompt_contacts_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_contacts_text)
-    await safe_answer(
+    if not await state_matches(state, ArtistFlow.waiting_for_contacts_text):
+        return
+    await safe_fsm_answer(
         message,
         "Шаг 7 из 7. Отправьте контакты текстом без ссылок на сайты.",
     )
@@ -258,7 +277,7 @@ async def start_single_field_edit(message: Message, db: Database, state: FSMCont
         actor_telegram_id=message.from_user.id,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
-    await safe_answer(
+    await safe_fsm_answer(
         message,
         "Что изменить в анкете?",
         reply_markup=profile_field_selection_keyboard(),
@@ -293,11 +312,12 @@ async def start_single_field_edit_callback(
             actor_telegram_id=callback.from_user.id,
         )
         await state.set_state(ArtistFlow.waiting_for_format)
-        await safe_answer(
+        if await state_matches(state, ArtistFlow.waiting_for_format):
+            await safe_fsm_answer(
             callback.message,
             "Шаг 1 из 7. Выберите формат работы:",
             reply_markup=format_keyboard(),
-        )
+            )
         return
 
     await safe_callback_answer(callback)
@@ -308,7 +328,7 @@ async def start_single_field_edit_callback(
         actor_telegram_id=callback.from_user.id,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
-    await safe_answer(
+    await safe_fsm_answer(
         callback.message,
         "Что изменить в анкете?",
         reply_markup=profile_field_selection_keyboard(),
@@ -328,7 +348,8 @@ async def prompt_selected_field(
 
     if field_name == "format":
         await state.set_state(ArtistFlow.waiting_for_format)
-        await safe_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
+        if await state_matches(state, ArtistFlow.waiting_for_format):
+            await safe_fsm_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
         return
     if field_name == "portfolio":
         await state.update_data(portfolio_images=[])
@@ -336,31 +357,35 @@ async def prompt_selected_field(
         return
     if field_name == "description":
         await state.set_state(ArtistFlow.waiting_for_description)
-        await safe_answer(
+        if await state_matches(state, ArtistFlow.waiting_for_description):
+            await safe_fsm_answer(
             target_message,
             "Отправьте новое описание.",
             reply_markup=remove_reply_keyboard(),
-        )
+            )
         return
     if field_name == "price":
         await state.set_state(ArtistFlow.waiting_for_currency)
-        await safe_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
+        if await state_matches(state, ArtistFlow.waiting_for_currency):
+            await safe_fsm_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
         return
     if field_name == "deadline":
         await state.set_state(ArtistFlow.waiting_for_deadline_category)
-        await safe_answer(
+        if await state_matches(state, ArtistFlow.waiting_for_deadline_category):
+            await safe_fsm_answer(
             target_message,
             "Выберите новые сроки:",
             reply_markup=deadline_category_keyboard(),
-        )
+            )
         return
     if field_name == "contacts":
         await state.set_state(ArtistFlow.waiting_for_contacts_text)
-        await safe_answer(
+        if await state_matches(state, ArtistFlow.waiting_for_contacts_text):
+            await safe_fsm_answer(
             target_message,
             "Отправьте новые контакты без ссылок.",
             reply_markup=remove_reply_keyboard(),
-        )
+            )
 
 
 async def send_profile_view(message: Message, db: Database) -> None:
@@ -494,7 +519,7 @@ async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
     image_ids = list(data.get("portfolio_images", []))
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await safe_answer(
+        await safe_fsm_answer(
             message,
             f"Можно загрузить не более {MAX_PORTFOLIO_IMAGES} изображений. Нажмите Готово."
         )
@@ -505,14 +530,14 @@ async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
     await state.update_data(portfolio_images=image_ids)
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await safe_answer(
+        await safe_fsm_answer(
             message,
             f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Лимит достигнут.",
             reply_markup=portfolio_finish_keyboard(),
         )
         return
 
-    await safe_answer(
+    await safe_fsm_answer(
         message,
         f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Можно отправить ещё фото или нажать Готово.",
         reply_markup=portfolio_finish_keyboard(),
@@ -525,7 +550,7 @@ async def finish_portfolio_step(message: Message, state: FSMContext, db: Databas
     image_ids = list(data.get("portfolio_images", []))
 
     if not image_ids:
-        await safe_answer(
+        await safe_fsm_answer(
             message,
             "Сначала отправьте хотя бы одно изображение для портфолио."
         )
@@ -540,7 +565,7 @@ async def finish_portfolio_step(message: Message, state: FSMContext, db: Databas
 
 @router.message(ArtistFlow.waiting_for_portfolio_images)
 async def invalid_portfolio_input(message: Message) -> None:
-    await safe_answer(
+    await safe_fsm_answer(
         message,
         "На этом шаге нужно отправить фото или нажать Готово."
     )
@@ -550,7 +575,7 @@ async def invalid_portfolio_input(message: Message) -> None:
 async def set_description(message: Message, state: FSMContext, db: Database) -> None:
     description = message.text.strip()
     if not description:
-        await safe_answer(message, "Описание не должно быть пустым.")
+        await safe_fsm_answer(message, "Описание не должно быть пустым.")
         return
     await state.update_data(description=description)
     data = await state.get_data()
@@ -576,11 +601,12 @@ async def set_currency(callback: CallbackQuery, state: FSMContext, db: Database)
         await safe_edit_text(callback.message, f"Валюта: <b>{value}</b>.")
         await safe_callback_answer(callback)
         await state.set_state(ArtistFlow.waiting_for_price_text)
-        await safe_answer(
+        if await state_matches(state, ArtistFlow.waiting_for_price_text):
+            await safe_fsm_answer(
             callback.message,
             "Отправьте новый прайс.\n"
             "В анкете он будет показан как: ваш текст (валюта)."
-        )
+            )
         return
 
     await safe_edit_text(callback.message, f"Шаг 4 из 7. Валюта: <b>{value}</b>.")
@@ -592,7 +618,7 @@ async def set_currency(callback: CallbackQuery, state: FSMContext, db: Database)
 async def set_price_text(message: Message, state: FSMContext, db: Database) -> None:
     price_text = message.text.strip()
     if not price_text:
-        await safe_answer(message, "Прайс не должен быть пустым.")
+        await safe_fsm_answer(message, "Прайс не должен быть пустым.")
         return
     await state.update_data(price_text=price_text)
     data = await state.get_data()
@@ -639,10 +665,10 @@ async def set_contacts_text(
 ) -> None:
     contacts_text = message.text.strip()
     if not contacts_text:
-        await safe_answer(message, "Контакты не должны быть пустыми.")
+        await safe_fsm_answer(message, "Контакты не должны быть пустыми.")
         return
     if contacts_have_links(contacts_text):
-        await safe_answer(
+        await safe_fsm_answer(
             message,
             "Контакты должны быть без ссылок на сайты. Уберите URL и домены."
         )
@@ -661,7 +687,7 @@ async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
 @router.message(ArtistFlow.waiting_for_price_text)
 @router.message(ArtistFlow.waiting_for_contacts_text)
 async def invalid_text_input(message: Message) -> None:
-    await safe_answer(message, "На этом шаге ожидается текстовое сообщение.")
+    await safe_fsm_answer(message, "На этом шаге ожидается текстовое сообщение.")
 
 
 @router.callback_query(ArtistFlow.waiting_for_currency)

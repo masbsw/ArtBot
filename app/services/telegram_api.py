@@ -13,9 +13,11 @@ MediaGroupItem = InputMediaAudio | InputMediaDocument | InputMediaPhoto | InputM
 
 logger = logging.getLogger(__name__)
 RETRY_DELAYS = (1, 2, 3)
+FSM_RETRY_DELAYS = (1,)
 TELEGRAM_API_CONCURRENCY_LIMIT = 5
 CALLBACK_MIN_INTERVAL_SECONDS = 1.5
 CALLBACK_ANSWER_TIMEOUT_SECONDS = 3
+FSM_ANSWER_TIMEOUT_SECONDS = 7
 telegram_api_semaphore = asyncio.Semaphore(TELEGRAM_API_CONCURRENCY_LIMIT)
 _callback_rate_limit_lock = asyncio.Lock()
 _callback_last_pressed_at: dict[int, float] = {}
@@ -53,6 +55,37 @@ async def retry_telegram_request(
             delay = RETRY_DELAYS[attempt - 1]
             logger.warning(
                 "Telegram request timeout operation=%s attempt=%s retry_in=%ss",
+                operation_name,
+                attempt,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+
+async def retry_fsm_telegram_request(
+    operation_name: str,
+    request: Callable[..., Awaitable[RetryResultT]],
+    *args: Any,
+    **kwargs: Any,
+) -> RetryResultT | None:
+    request_kwargs = dict(kwargs)
+    request_kwargs.setdefault("request_timeout", FSM_ANSWER_TIMEOUT_SECONDS)
+    for attempt in range(1, len(FSM_RETRY_DELAYS) + 2):
+        try:
+            async with telegram_api_semaphore:
+                return await request(*args, **request_kwargs)
+        except (TelegramNetworkError, TimeoutError):
+            if attempt > len(FSM_RETRY_DELAYS):
+                logger.warning(
+                    "FSM telegram request failed operation=%s attempts=%s",
+                    operation_name,
+                    attempt,
+                )
+                return None
+
+            delay = FSM_RETRY_DELAYS[attempt - 1]
+            logger.warning(
+                "FSM telegram request timeout operation=%s attempt=%s retry_in=%ss",
                 operation_name,
                 attempt,
                 delay,
@@ -107,6 +140,19 @@ async def safe_answer(
 ) -> Message | None:
     return await retry_telegram_request(
         "message.answer",
+        message.answer,
+        text,
+        **kwargs,
+    )
+
+
+async def safe_fsm_answer(
+    message: Message,
+    text: str,
+    **kwargs: Any,
+) -> Message | None:
+    return await retry_fsm_telegram_request(
+        "message.answer.fsm",
         message.answer,
         text,
         **kwargs,
