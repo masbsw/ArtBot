@@ -5,7 +5,7 @@ from time import monotonic
 from typing import Any, TypeVar
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import CallbackQuery, InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo, Message
 
 RetryResultT = TypeVar("RetryResultT")
@@ -15,9 +15,20 @@ logger = logging.getLogger(__name__)
 RETRY_DELAYS = (1, 2, 3)
 TELEGRAM_API_CONCURRENCY_LIMIT = 5
 CALLBACK_MIN_INTERVAL_SECONDS = 1.5
+CALLBACK_ANSWER_TIMEOUT_SECONDS = 3
 telegram_api_semaphore = asyncio.Semaphore(TELEGRAM_API_CONCURRENCY_LIMIT)
 _callback_rate_limit_lock = asyncio.Lock()
 _callback_last_pressed_at: dict[int, float] = {}
+
+
+def _is_message_not_modified_error(error: TelegramBadRequest) -> bool:
+    message = str(error).lower()
+    return "message is not modified" in message
+
+
+def _is_expired_callback_error(error: TelegramBadRequest) -> bool:
+    message = str(error).lower()
+    return "query is too old" in message or "query id is invalid" in message
 
 
 async def retry_telegram_request(
@@ -30,7 +41,7 @@ async def retry_telegram_request(
         try:
             async with telegram_api_semaphore:
                 return await request(*args, **kwargs)
-        except TelegramNetworkError:
+        except (TelegramNetworkError, TimeoutError):
             if attempt > len(RETRY_DELAYS):
                 logger.exception(
                     "Telegram request failed after retries operation=%s attempts=%s",
@@ -134,12 +145,18 @@ async def safe_edit_text(
     text: str,
     **kwargs: Any,
 ) -> Message | bool | None:
-    return await retry_telegram_request(
-        "message.edit_text",
-        message.edit_text,
-        text,
-        **kwargs,
-    )
+    try:
+        return await retry_telegram_request(
+            "message.edit_text",
+            message.edit_text,
+            text,
+            **kwargs,
+        )
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified_error(exc):
+            logger.debug("Ignoring TelegramBadRequest operation=message.edit_text reason=not_modified")
+            return None
+        raise
 
 
 async def safe_send_message(
@@ -162,10 +179,22 @@ async def safe_callback_answer(
     text: str | None = None,
     **kwargs: Any,
 ) -> bool:
-    result = await retry_telegram_request(
-        "callback.answer",
-        callback.answer,
-        text,
-        **kwargs,
-    )
-    return result is not None
+    try:
+        async with telegram_api_semaphore:
+            result = await callback.answer(
+                text,
+                request_timeout=CALLBACK_ANSWER_TIMEOUT_SECONDS,
+                **kwargs,
+            )
+        return result is not None
+    except (TelegramNetworkError, TimeoutError):
+        logger.warning(
+            "Telegram callback answer timed out text=%s",
+            text,
+        )
+        return False
+    except TelegramBadRequest as exc:
+        if _is_expired_callback_error(exc):
+            logger.debug("Ignoring expired callback answer text=%s", text)
+            return False
+        raise
