@@ -24,8 +24,29 @@ from app.services.telegram_api import (
     safe_edit_text,
 )
 from app.services.users import ROLE_TITLES, get_or_create_user, get_user_by_telegram_id, set_user_role
+from app.states.artist import ArtistFlow
+from app.states.client import ClientFlow
 
 router = Router(name="start")
+
+
+def build_active_flow_text(current_state: str) -> str:
+    artist_steps = {
+        ArtistFlow.waiting_for_format.state: "Сейчас активен шаг 1 из 7: выбор формата.",
+        ArtistFlow.waiting_for_portfolio_images.state: "Сейчас активен шаг 2 из 7: загрузка портфолио.",
+        ArtistFlow.waiting_for_description.state: "Сейчас активен шаг 3 из 7: описание.",
+        ArtistFlow.waiting_for_currency.state: "Сейчас активен шаг 4 из 7: выбор валюты.",
+        ArtistFlow.waiting_for_price_text.state: "Сейчас активен шаг 5 из 7: прайс.",
+        ArtistFlow.waiting_for_deadline_category.state: "Сейчас активен шаг 6 из 7: сроки.",
+        ArtistFlow.waiting_for_contacts_text.state: "Сейчас активен шаг 7 из 7: контакты.",
+        ArtistFlow.waiting_for_edit_field.state: "Сейчас активно редактирование отдельного поля анкеты.",
+    }
+    client_steps = {
+        ClientFlow.waiting_for_format.state: "Сейчас активна настройка фильтров: выбор формата.",
+        ClientFlow.waiting_for_deadline_category.state: "Сейчас активна настройка фильтров: выбор сроков.",
+        ClientFlow.waiting_for_complaint_reason.state: "Сейчас ожидается текст жалобы.",
+    }
+    return artist_steps.get(current_state) or client_steps.get(current_state) or "Сценарий уже выполняется. Продолжайте текущий шаг."
 
 
 def is_admin_user(telegram_id: int, settings: Settings) -> bool:
@@ -87,6 +108,10 @@ async def start_command(
 ) -> None:
     if message.from_user is None:
         await safe_answer(message, "Не удалось определить пользователя Telegram.")
+        return
+    current_state = await state.get_state()
+    if current_state is not None:
+        await safe_answer(message, build_active_flow_text(current_state))
         return
 
     async with db.session() as session:

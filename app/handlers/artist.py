@@ -515,33 +515,28 @@ async def set_artist_format(callback: CallbackQuery, state: FSMContext, db: Data
 
 @router.message(ArtistFlow.waiting_for_portfolio_images, F.photo)
 async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
+    if not await state_matches(state, ArtistFlow.waiting_for_portfolio_images):
+        return
+
     data = await state.get_data()
     image_ids = list(data.get("portfolio_images", []))
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await safe_fsm_answer(
-            message,
-            f"Можно загрузить не более {MAX_PORTFOLIO_IMAGES} изображений. Нажмите Готово."
-        )
         return
 
     largest_photo = message.photo[-1]
     image_ids.append(largest_photo.file_id)
+    if len(image_ids) > MAX_PORTFOLIO_IMAGES:
+        image_ids = image_ids[:MAX_PORTFOLIO_IMAGES]
     await state.update_data(portfolio_images=image_ids)
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
         await safe_fsm_answer(
             message,
-            f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Лимит достигнут.",
-            reply_markup=portfolio_finish_keyboard(),
+            f"Портфолио заполнено: {MAX_PORTFOLIO_IMAGES}/{MAX_PORTFOLIO_IMAGES}.",
         )
+        await prompt_description_step(message, state)
         return
-
-    await safe_fsm_answer(
-        message,
-        f"Загружено {len(image_ids)} из {MAX_PORTFOLIO_IMAGES}. Можно отправить ещё фото или нажать Готово.",
-        reply_markup=portfolio_finish_keyboard(),
-    )
 
 
 @router.message(ArtistFlow.waiting_for_portfolio_images, F.text == "Готово")

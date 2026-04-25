@@ -46,7 +46,10 @@ async def retry_telegram_request(
     for attempt in range(1, len(RETRY_DELAYS) + 2):
         try:
             async with telegram_api_semaphore:
-                return await request(*args, **request_kwargs)
+                return await asyncio.wait_for(
+                    request(*args, **request_kwargs),
+                    timeout=request_kwargs["request_timeout"],
+                )
         except (TelegramNetworkError, TimeoutError):
             if attempt > len(RETRY_DELAYS):
                 logger.exception(
@@ -85,7 +88,10 @@ async def retry_fsm_telegram_request(
     for attempt in range(1, len(FSM_RETRY_DELAYS) + 2):
         try:
             async with telegram_api_semaphore:
-                return await request(*args, **request_kwargs)
+                return await asyncio.wait_for(
+                    request(*args, **request_kwargs),
+                    timeout=request_kwargs["request_timeout"],
+                )
         except (TelegramNetworkError, TimeoutError):
             if attempt > len(FSM_RETRY_DELAYS):
                 logger.warning(
@@ -235,10 +241,13 @@ async def safe_callback_answer(
 ) -> bool:
     try:
         async with telegram_api_semaphore:
-            result = await callback.answer(
-                text,
-                request_timeout=CALLBACK_ANSWER_TIMEOUT_SECONDS,
-                **kwargs,
+            result = await asyncio.wait_for(
+                callback.answer(
+                    text,
+                    request_timeout=CALLBACK_ANSWER_TIMEOUT_SECONDS,
+                    **kwargs,
+                ),
+                timeout=CALLBACK_ANSWER_TIMEOUT_SECONDS,
             )
         return result is not None
     except (TelegramNetworkError, TimeoutError):
