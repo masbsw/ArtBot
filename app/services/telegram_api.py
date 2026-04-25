@@ -14,7 +14,9 @@ MediaGroupItem = InputMediaAudio | InputMediaDocument | InputMediaPhoto | InputM
 logger = logging.getLogger(__name__)
 RETRY_DELAYS = (1, 2, 3)
 FSM_RETRY_DELAYS = (1,)
-TELEGRAM_API_CONCURRENCY_LIMIT = 5
+TELEGRAM_API_CONCURRENCY_LIMIT = 15
+DEFAULT_TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
+MEDIA_GROUP_REQUEST_TIMEOUT_SECONDS = 20
 CALLBACK_MIN_INTERVAL_SECONDS = 1.5
 CALLBACK_ANSWER_TIMEOUT_SECONDS = 3
 FSM_ANSWER_TIMEOUT_SECONDS = 7
@@ -39,10 +41,12 @@ async def retry_telegram_request(
     *args: Any,
     **kwargs: Any,
 ) -> RetryResultT | None:
+    request_kwargs = dict(kwargs)
+    request_kwargs.setdefault("request_timeout", DEFAULT_TELEGRAM_REQUEST_TIMEOUT_SECONDS)
     for attempt in range(1, len(RETRY_DELAYS) + 2):
         try:
             async with telegram_api_semaphore:
-                return await request(*args, **kwargs)
+                return await request(*args, **request_kwargs)
         except (TelegramNetworkError, TimeoutError):
             if attempt > len(RETRY_DELAYS):
                 logger.exception(
@@ -60,6 +64,14 @@ async def retry_telegram_request(
                 delay,
             )
             await asyncio.sleep(delay)
+        except TelegramBadRequest as exc:
+            if _is_message_not_modified_error(exc):
+                logger.debug("Ignoring TelegramBadRequest operation=%s reason=not_modified", operation_name)
+                return None
+            if _is_expired_callback_error(exc):
+                logger.debug("Ignoring TelegramBadRequest operation=%s reason=expired_callback", operation_name)
+                return None
+            raise
 
 
 async def retry_fsm_telegram_request(
@@ -177,11 +189,13 @@ async def safe_answer_media_group(
     media: Sequence[MediaGroupItem],
     **kwargs: Any,
 ) -> list[Message]:
+    request_kwargs = dict(kwargs)
+    request_kwargs.setdefault("request_timeout", MEDIA_GROUP_REQUEST_TIMEOUT_SECONDS)
     result = await retry_telegram_request(
         "message.answer_media_group",
         message.answer_media_group,
         media,
-        **kwargs,
+        **request_kwargs,
     )
     return list(result) if result is not None else []
 
@@ -191,18 +205,12 @@ async def safe_edit_text(
     text: str,
     **kwargs: Any,
 ) -> Message | bool | None:
-    try:
-        return await retry_telegram_request(
-            "message.edit_text",
-            message.edit_text,
-            text,
-            **kwargs,
-        )
-    except TelegramBadRequest as exc:
-        if _is_message_not_modified_error(exc):
-            logger.debug("Ignoring TelegramBadRequest operation=message.edit_text reason=not_modified")
-            return None
-        raise
+    return await retry_telegram_request(
+        "message.edit_text",
+        message.edit_text,
+        text,
+        **kwargs,
+    )
 
 
 async def safe_send_message(
