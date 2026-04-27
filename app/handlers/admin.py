@@ -100,19 +100,29 @@ async def get_admin_profiles_by_scope(
     return await list_profiles_with_complaints(session), "Анкет с жалобами нет."
 
 
-async def delete_admin_view_messages(message: Message, state: FSMContext) -> None:
+async def get_admin_view_message_ids(state: FSMContext) -> list[int]:
     data = await state.get_data()
     message_ids = data.get(ADMIN_VIEW_MESSAGE_IDS_KEY, [])
     if not isinstance(message_ids, list):
-        message_ids = []
+        return []
+    return [message_id for message_id in message_ids if isinstance(message_id, int)]
+
+
+async def delete_admin_view_messages(
+    message: Message,
+    state: FSMContext,
+    message_ids: list[int] | None = None,
+) -> None:
+    should_clear_state = message_ids is None
+    if message_ids is None:
+        message_ids = await get_admin_view_message_ids(state)
 
     for message_id in message_ids:
-        if not isinstance(message_id, int):
-            continue
         with suppress(TelegramBadRequest):
             await safe_delete_message(message.bot, message.chat.id, message_id)
 
-    await state.update_data(admin_view_message_ids=[])
+    if should_clear_state:
+        await state.update_data(admin_view_message_ids=[])
 
 
 async def show_admin_profile(
@@ -123,7 +133,7 @@ async def show_admin_profile(
     current_index: int,
     total_count: int,
 ) -> None:
-    await delete_admin_view_messages(message, state)
+    old_message_ids = await get_admin_view_message_ids(state)
     reply_markup = admin_profile_actions_keyboard(
         profile_id=profile.id,
         user_id=profile.user_id,
@@ -134,13 +144,21 @@ async def show_admin_profile(
     sent_messages = await send_profile_card(
         message,
         profile,
-        reply_markup=reply_markup,
+        reply_markup=None,
         title=f"Анкета № {current_index}/{total_count}",
         extra_text=admin_profile_extra(profile),
     )
+    actions_message = await safe_answer(
+        message,
+        "Доступные действия:",
+        reply_markup=reply_markup,
+    )
+    if actions_message is not None:
+        sent_messages.append(actions_message)
     await state.update_data(
         admin_view_message_ids=[item.message_id for item in sent_messages],
     )
+    await delete_admin_view_messages(message, state, old_message_ids)
 
 
 async def send_admin_profiles(
