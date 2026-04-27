@@ -689,7 +689,7 @@ async def set_contacts_text(
     await finish_artist_profile_update(message, state, db)
 
 
-@router.callback_query(ArtistFlow.waiting_for_edit_field)
+@router.callback_query(ArtistFlow.waiting_for_edit_field, ~F.data.startswith("admin:"))
 async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "Выберите поле кнопкой ниже.", show_alert=True)
 
@@ -701,7 +701,7 @@ async def invalid_text_input(message: Message) -> None:
     await safe_fsm_answer(message, "На этом шаге ожидается текстовое сообщение.")
 
 
-@router.callback_query(ArtistFlow.waiting_for_currency)
-@router.callback_query(ArtistFlow.waiting_for_deadline_category)
+@router.callback_query(ArtistFlow.waiting_for_currency, ~F.data.startswith("admin:"))
+@router.callback_query(ArtistFlow.waiting_for_deadline_category, ~F.data.startswith("admin:"))
 async def invalid_option_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "Выберите вариант кнопкой ниже.", show_alert=True)

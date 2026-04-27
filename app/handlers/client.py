@@ -695,7 +695,7 @@ async def saved_profiles_button(message: Message, db: Database, state: FSMContex
     await saved_profiles_command(message, db, state)
 
 
-@router.callback_query(ClientFlow.waiting_for_deadline_category)
-@router.callback_query(ClientFlow.waiting_for_format)
+@router.callback_query(ClientFlow.waiting_for_deadline_category, ~F.data.startswith("admin:"))
+@router.callback_query(ClientFlow.waiting_for_format, ~F.data.startswith("admin:"))
 async def invalid_client_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "Выберите вариант кнопкой ниже.", show_alert=True)
