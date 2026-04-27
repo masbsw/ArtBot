@@ -3,10 +3,10 @@ import logging
 from html import escape
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app.config import Settings
 from app.db.session import Database
@@ -42,10 +42,10 @@ from app.services.admin_profiles import (
 from app.services.profile_cards import build_profile_caption
 from app.services.telegram_api import (
     safe_answer,
-    safe_answer_photo,
     safe_callback_answer,
     safe_edit_text,
     safe_send_message,
+    telegram_api_semaphore,
 )
 from app.states.admin import AdminFlow
 
@@ -56,6 +56,7 @@ ADMIN_VIEW_SCOPE_KEY = "admin_view_scope"
 ADMIN_VIEW_INDEX_KEY = "admin_view_index"
 BROADCAST_BATCH_SIZE = 20
 BROADCAST_BATCH_DELAY_SECONDS = 1
+ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS = 7
 
 
 def is_admin(telegram_id: int, settings: Settings) -> bool:
@@ -96,6 +97,20 @@ async def get_admin_profiles_by_scope(
     return await list_profiles_with_complaints(session), "Анкет с жалобами нет."
 
 
+async def send_admin_profile_media_group(
+    message: Message,
+    media: list[InputMediaPhoto],
+) -> list[Message]:
+    async with telegram_api_semaphore:
+        return await asyncio.wait_for(
+            message.answer_media_group(
+                media,
+                request_timeout=ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS,
+            ),
+            timeout=ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS,
+        )
+
+
 async def show_admin_profile(
     message: Message,
     state: FSMContext,
@@ -112,30 +127,36 @@ async def show_admin_profile(
     if extra_text:
         caption = f"{caption}\n\n{extra_text}"
 
-    sent_card = False
+    sent_card_mode = "text_fallback"
     images = [
         item
         for item in profile.portfolio_images
         if item.telegram_file_id and item.telegram_file_id.strip()
-    ]
+    ][:2]
     if images:
         try:
-            card_message = await safe_answer_photo(
+            media = [
+                InputMediaPhoto(
+                    media=images[0].telegram_file_id,
+                    caption=caption,
+                )
+            ]
+            if len(images) > 1:
+                media.append(InputMediaPhoto(media=images[1].telegram_file_id))
+            sent_messages = await send_admin_profile_media_group(
                 message,
-                images[0].telegram_file_id,
-                caption=caption,
+                media,
             )
-            sent_card = card_message is not None
-        except TelegramBadRequest:
-            sent_card = False
+            sent_card_mode = "media_group" if sent_messages else "text_fallback"
+        except (TelegramBadRequest, TelegramNetworkError, TimeoutError):
+            sent_card_mode = "text_fallback"
 
-    if not sent_card:
+    if sent_card_mode == "text_fallback":
         fallback_text = (
             "Не удалось загрузить фото анкеты, показываю данные текстом:\n\n"
             f"{caption}"
         )
-        text_message = await safe_answer(message, fallback_text)
-        sent_card = text_message is not None
+        await safe_answer(message, fallback_text)
 
     actions_message = await safe_answer(
         message,
@@ -156,7 +177,7 @@ async def show_admin_profile(
         "admin_show_profile profile_id=%s index=%s sent_card=%s sent_actions=%s",
         profile.id,
         current_index,
-        sent_card,
+        sent_card_mode,
         sent_actions,
     )
 
