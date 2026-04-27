@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from html import escape
 
 from aiogram import F, Router
@@ -38,9 +39,10 @@ from app.services.admin_profiles import (
     list_profiles_with_complaints,
     set_user_blocked,
 )
-from app.services.profile_cards import send_profile_card
+from app.services.profile_cards import build_profile_caption
 from app.services.telegram_api import (
     safe_answer,
+    safe_answer_photo,
     safe_callback_answer,
     safe_edit_text,
     safe_send_message,
@@ -48,6 +50,7 @@ from app.services.telegram_api import (
 from app.states.admin import AdminFlow
 
 router = Router(name="admin")
+logger = logging.getLogger(__name__)
 
 ADMIN_VIEW_SCOPE_KEY = "admin_view_scope"
 ADMIN_VIEW_INDEX_KEY = "admin_view_index"
@@ -101,14 +104,40 @@ async def show_admin_profile(
     current_index: int,
     total_count: int,
 ) -> None:
-    await send_profile_card(
-        message,
+    caption = build_profile_caption(
         profile,
-        reply_markup=None,
         title=f"Анкета № {current_index}/{total_count}",
-        extra_text=admin_profile_extra(profile),
     )
-    await safe_answer(
+    extra_text = admin_profile_extra(profile)
+    if extra_text:
+        caption = f"{caption}\n\n{extra_text}"
+
+    sent_card = False
+    images = [
+        item
+        for item in profile.portfolio_images
+        if item.telegram_file_id and item.telegram_file_id.strip()
+    ]
+    if images:
+        try:
+            card_message = await safe_answer_photo(
+                message,
+                images[0].telegram_file_id,
+                caption=caption,
+            )
+            sent_card = card_message is not None
+        except TelegramBadRequest:
+            sent_card = False
+
+    if not sent_card:
+        fallback_text = (
+            "Не удалось загрузить фото анкеты, показываю данные текстом:\n\n"
+            f"{caption}"
+        )
+        text_message = await safe_answer(message, fallback_text)
+        sent_card = text_message is not None
+
+    actions_message = await safe_answer(
         message,
         "Действия:",
         reply_markup=admin_profile_actions_keyboard(
@@ -116,11 +145,19 @@ async def show_admin_profile(
             user_id=profile.user_id,
         ),
     )
+    sent_actions = actions_message is not None
     await state.update_data(
         **{
             ADMIN_VIEW_SCOPE_KEY: scope,
             ADMIN_VIEW_INDEX_KEY: current_index - 1,
         }
+    )
+    logger.info(
+        "admin_show_profile profile_id=%s index=%s sent_card=%s sent_actions=%s",
+        profile.id,
+        current_index,
+        sent_card,
+        sent_actions,
     )
 
 
