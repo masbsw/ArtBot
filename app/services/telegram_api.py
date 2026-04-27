@@ -35,6 +35,15 @@ def _is_expired_callback_error(error: TelegramBadRequest) -> bool:
     return "query is too old" in message or "query id is invalid" in message
 
 
+def _is_safe_delete_error(error: TelegramBadRequest) -> bool:
+    message = str(error).lower()
+    return (
+        "message to delete not found" in message
+        or "message can't be deleted" in message
+        or "message cannot be deleted" in message
+    )
+
+
 async def retry_telegram_request(
     operation_name: str,
     request: Callable[..., Awaitable[RetryResultT]],
@@ -232,6 +241,40 @@ async def safe_send_message(
         text,
         **kwargs,
     )
+
+
+async def safe_delete_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+) -> bool:
+    try:
+        async with telegram_api_semaphore:
+            result = await asyncio.wait_for(
+                bot.delete_message(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    request_timeout=5,
+                ),
+                timeout=5,
+            )
+        return bool(result)
+    except (TelegramNetworkError, TimeoutError):
+        logger.warning(
+            "Telegram delete_message timed out chat_id=%s message_id=%s",
+            chat_id,
+            message_id,
+        )
+        return False
+    except TelegramBadRequest as exc:
+        if _is_safe_delete_error(exc):
+            logger.debug(
+                "Ignoring delete_message TelegramBadRequest chat_id=%s message_id=%s",
+                chat_id,
+                message_id,
+            )
+            return False
+        raise
 
 
 async def safe_callback_answer(

@@ -55,6 +55,7 @@ from app.services.telegram_api import (
     enforce_callback_rate_limit,
     safe_answer,
     safe_callback_answer,
+    safe_delete_message,
     safe_edit_text,
 )
 from app.services.users import get_or_create_user
@@ -229,7 +230,7 @@ async def delete_saved_view_messages(
         if not isinstance(message_id, int):
             continue
         with suppress(TelegramBadRequest):
-            await message.bot.delete_message(message.chat.id, message_id)
+            await safe_delete_message(message.bot, message.chat.id, message_id)
 
     await state.update_data(saved_view_message_ids=[])
 

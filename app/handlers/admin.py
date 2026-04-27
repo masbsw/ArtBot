@@ -47,6 +47,7 @@ from app.services.telegram_api import (
     enforce_callback_rate_limit,
     safe_answer,
     safe_callback_answer,
+    safe_delete_message,
     safe_edit_text,
     safe_send_message,
 )
@@ -109,7 +110,7 @@ async def delete_admin_view_messages(message: Message, state: FSMContext) -> Non
         if not isinstance(message_id, int):
             continue
         with suppress(TelegramBadRequest):
-            await message.bot.delete_message(message.chat.id, message_id)
+            await safe_delete_message(message.bot, message.chat.id, message_id)
 
     await state.update_data(admin_view_message_ids=[])
 

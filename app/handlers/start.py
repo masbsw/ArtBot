@@ -34,9 +34,9 @@ def build_active_flow_text(current_state: str) -> str:
     artist_steps = {
         ArtistFlow.waiting_for_format.state: "Сейчас активен шаг 1 из 7: выбор формата.",
         ArtistFlow.waiting_for_portfolio_images.state: "Сейчас активен шаг 2 из 7: загрузка портфолио.",
-        ArtistFlow.waiting_for_description.state: "Сейчас активен шаг 3 из 7: описание.",
-        ArtistFlow.waiting_for_currency.state: "Сейчас активен шаг 4 из 7: выбор валюты.",
-        ArtistFlow.waiting_for_price_text.state: "Сейчас активен шаг 5 из 7: прайс.",
+        ArtistFlow.waiting_for_currency.state: "Сейчас активен шаг 3 из 7: выбор валюты.",
+        ArtistFlow.waiting_for_price_text.state: "Сейчас активен шаг 4 из 7: прайс.",
+        ArtistFlow.waiting_for_description.state: "Сейчас активен шаг 5 из 7: описание.",
         ArtistFlow.waiting_for_deadline_category.state: "Сейчас активен шаг 6 из 7: сроки.",
         ArtistFlow.waiting_for_contacts_text.state: "Сейчас активен шаг 7 из 7: контакты.",
         ArtistFlow.waiting_for_edit_field.state: "Сейчас активно редактирование отдельного поля анкеты.",

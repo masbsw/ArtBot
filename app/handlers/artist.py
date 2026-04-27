@@ -136,7 +136,7 @@ async def prompt_description_step(message: Message, state: FSMContext) -> None:
         return
     await safe_fsm_answer(
         message,
-        "Шаг 3 из 7. Напишите краткое описание себя и услуг.",
+        "Шаг 5 из 7. Напишите краткое описание себя и услуг.",
         reply_markup=remove_reply_keyboard(),
     )
 
@@ -147,7 +147,19 @@ async def prompt_currency_step(message: Message, state: FSMContext) -> None:
         return
     await safe_fsm_answer(
         message,
-        "Шаг 4 из 7. Выберите валюту:",
+        "Шаг 3 из 7. Выберите валюту:",
+        reply_markup=currency_keyboard(),
+    )
+
+
+async def prompt_currency_step_after_portfolio(message: Message, state: FSMContext) -> None:
+    await state.set_state(ArtistFlow.waiting_for_currency)
+    if not await state_matches(state, ArtistFlow.waiting_for_currency):
+        return
+    await safe_fsm_answer(
+        message,
+        f"Портфолио заполнено: {MAX_PORTFOLIO_IMAGES}/{MAX_PORTFOLIO_IMAGES}.\n\n"
+        "Шаг 3 из 7. Выберите валюту:",
         reply_markup=currency_keyboard(),
     )
 
@@ -158,7 +170,7 @@ async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
         return
     await safe_fsm_answer(
         message,
-        "Шаг 5 из 7. Укажите цену в свободной форме.\n"
+        "Шаг 4 из 7. Укажите цену в свободной форме.\n"
         "В анкете она будет показана как: ваш текст (валюта)."
     )
 
@@ -524,19 +536,23 @@ async def collect_portfolio_image(message: Message, state: FSMContext) -> None:
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
         return
 
-    largest_photo = message.photo[-1]
-    image_ids.append(largest_photo.file_id)
+    photo = message.photo[-2] if len(message.photo) >= 2 else message.photo[-1]
+    image_ids.append(photo.file_id)
     if len(image_ids) > MAX_PORTFOLIO_IMAGES:
         image_ids = image_ids[:MAX_PORTFOLIO_IMAGES]
     await state.update_data(portfolio_images=image_ids)
 
     if len(image_ids) >= MAX_PORTFOLIO_IMAGES:
-        await safe_fsm_answer(
-            message,
-            f"Портфолио заполнено: {MAX_PORTFOLIO_IMAGES}/{MAX_PORTFOLIO_IMAGES}.",
-        )
-        await prompt_description_step(message, state)
+        await prompt_currency_step_after_portfolio(message, state)
         return
+
+
+@router.message(ArtistFlow.waiting_for_portfolio_images, F.document)
+async def invalid_portfolio_document(message: Message) -> None:
+    await safe_fsm_answer(
+        message,
+        "Пожалуйста, отправьте изображение именно как фото, не как файл."
+    )
 
 
 @router.message(ArtistFlow.waiting_for_portfolio_images, F.text == "Готово")
@@ -555,7 +571,7 @@ async def finish_portfolio_step(message: Message, state: FSMContext, db: Databas
         await finish_artist_profile_update(message, state, db)
         return
 
-    await prompt_description_step(message, state)
+    await prompt_currency_step_after_portfolio(message, state)
 
 
 @router.message(ArtistFlow.waiting_for_portfolio_images)
@@ -577,7 +593,7 @@ async def set_description(message: Message, state: FSMContext, db: Database) -> 
     if data.get("edit_mode") == "field" and data.get("edit_field") == "description":
         await finish_artist_profile_update(message, state, db)
         return
-    await prompt_currency_step(message, state)
+    await prompt_deadline_step(message, state)
 
 
 @router.callback_query(
@@ -604,7 +620,7 @@ async def set_currency(callback: CallbackQuery, state: FSMContext, db: Database)
             )
         return
 
-    await safe_edit_text(callback.message, f"Шаг 4 из 7. Валюта: <b>{value}</b>.")
+    await safe_edit_text(callback.message, f"Шаг 3 из 7. Валюта: <b>{value}</b>.")
     await safe_callback_answer(callback)
     await prompt_price_text_step(callback.message, state)
 
@@ -620,7 +636,7 @@ async def set_price_text(message: Message, state: FSMContext, db: Database) -> N
     if data.get("edit_mode") == "field" and data.get("edit_field") == "price":
         await finish_artist_profile_update(message, state, db)
         return
-    await prompt_deadline_step(message, state)
+    await prompt_description_step(message, state)
 
 
 @router.callback_query(

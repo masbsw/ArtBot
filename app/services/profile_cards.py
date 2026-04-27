@@ -19,6 +19,7 @@ from app.services.telegram_api import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_PROFILE_CARD_IMAGES = 2
 
 
 def build_profile_caption(profile: ArtistProfile, title: str = "Моя анкета") -> str:
@@ -49,7 +50,7 @@ async def send_profile_card(
         item
         for item in profile.portfolio_images
         if item.telegram_file_id and item.telegram_file_id.strip()
-    ]
+    ][:MAX_PROFILE_CARD_IMAGES]
 
     if not images:
         sent = await safe_answer(message, caption, reply_markup=reply_markup)

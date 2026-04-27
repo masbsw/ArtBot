@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import ArtistProfile, ArtistProfileStatus, PortfolioImage
 
-MAX_PORTFOLIO_IMAGES = 5
+MAX_PORTFOLIO_IMAGES = 2
 
 FORMAT_LABELS: dict[str, str] = {
     "digital": "digital",
@@ -87,7 +87,7 @@ async def upsert_artist_profile(
     form_data: dict[str, str | list[str]],
 ) -> ArtistProfile:
     profile = await get_artist_profile(session, user_id)
-    image_ids = list(form_data["portfolio_images"])
+    image_ids = list(form_data["portfolio_images"])[:MAX_PORTFOLIO_IMAGES]
 
     if profile is None:
         profile = ArtistProfile(user_id=user_id)
