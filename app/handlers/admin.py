@@ -6,7 +6,6 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from contextlib import suppress
 
 from app.config import Settings
 from app.db.session import Database
@@ -22,9 +21,7 @@ from app.keyboards.admin import (
     ADMIN_LIST_ALL_CALLBACK,
     ADMIN_LIST_COMPLAINTS_CALLBACK,
     ADMIN_LIST_HIDDEN_CALLBACK,
-    ADMIN_NAV_NEXT_PREFIX,
-    ADMIN_NAV_PREV_PREFIX,
-    ADMIN_RESTORE_PROFILE_PREFIX,
+    ADMIN_NEXT_CALLBACK,
     ADMIN_UNBLOCK_USER_PREFIX,
     admin_complaints_navigation_keyboard,
     admin_broadcast_confirm_keyboard,
@@ -44,10 +41,8 @@ from app.services.admin_profiles import (
 )
 from app.services.profile_cards import send_profile_card
 from app.services.telegram_api import (
-    enforce_callback_rate_limit,
     safe_answer,
     safe_callback_answer,
-    safe_delete_message,
     safe_edit_text,
     safe_send_message,
 )
@@ -55,7 +50,8 @@ from app.states.admin import AdminFlow
 
 router = Router(name="admin")
 
-ADMIN_VIEW_MESSAGE_IDS_KEY = "admin_view_message_ids"
+ADMIN_VIEW_SCOPE_KEY = "admin_view_scope"
+ADMIN_VIEW_INDEX_KEY = "admin_view_index"
 BROADCAST_BATCH_SIZE = 20
 BROADCAST_BATCH_DELAY_SECONDS = 1
 
@@ -81,8 +77,6 @@ async def ensure_admin_callback(
     if callback.from_user is None:
         await safe_callback_answer(callback)
         return False
-    if not await enforce_callback_rate_limit(callback):
-        return False
     if not is_admin(callback.from_user.id, settings):
         await safe_callback_answer(callback, "Доступ только для администраторов.", show_alert=True)
         return False
@@ -100,31 +94,6 @@ async def get_admin_profiles_by_scope(
     return await list_profiles_with_complaints(session), "Анкет с жалобами нет."
 
 
-async def get_admin_view_message_ids(state: FSMContext) -> list[int]:
-    data = await state.get_data()
-    message_ids = data.get(ADMIN_VIEW_MESSAGE_IDS_KEY, [])
-    if not isinstance(message_ids, list):
-        return []
-    return [message_id for message_id in message_ids if isinstance(message_id, int)]
-
-
-async def delete_admin_view_messages(
-    message: Message,
-    state: FSMContext,
-    message_ids: list[int] | None = None,
-) -> None:
-    should_clear_state = message_ids is None
-    if message_ids is None:
-        message_ids = await get_admin_view_message_ids(state)
-
-    for message_id in message_ids:
-        with suppress(TelegramBadRequest):
-            await safe_delete_message(message.bot, message.chat.id, message_id)
-
-    if should_clear_state:
-        await state.update_data(admin_view_message_ids=[])
-
-
 async def show_admin_profile(
     message: Message,
     state: FSMContext,
@@ -133,32 +102,27 @@ async def show_admin_profile(
     current_index: int,
     total_count: int,
 ) -> None:
-    old_message_ids = await get_admin_view_message_ids(state)
-    reply_markup = admin_profile_actions_keyboard(
-        profile_id=profile.id,
-        user_id=profile.user_id,
-        status=profile.status,
-        scope=scope,
-        has_complaints=profile.complaints_count > 0,
-    )
-    sent_messages = await send_profile_card(
+    await send_profile_card(
         message,
         profile,
         reply_markup=None,
         title=f"Анкета № {current_index}/{total_count}",
         extra_text=admin_profile_extra(profile),
     )
-    actions_message = await safe_answer(
+    await safe_answer(
         message,
-        "Доступные действия:",
-        reply_markup=reply_markup,
+        "Действия:",
+        reply_markup=admin_profile_actions_keyboard(
+            profile_id=profile.id,
+            user_id=profile.user_id,
+        ),
     )
-    if actions_message is not None:
-        sent_messages.append(actions_message)
     await state.update_data(
-        admin_view_message_ids=[item.message_id for item in sent_messages],
+        **{
+            ADMIN_VIEW_SCOPE_KEY: scope,
+            ADMIN_VIEW_INDEX_KEY: current_index - 1,
+        }
     )
-    await delete_admin_view_messages(message, state, old_message_ids)
 
 
 async def send_admin_profiles(
@@ -169,7 +133,6 @@ async def send_admin_profiles(
     scope: str,
 ) -> None:
     if not profiles:
-        await delete_admin_view_messages(message, state)
         await safe_answer(message, empty_text)
         return
     await show_admin_profile(message, state, profiles[0], scope, 1, len(profiles))
@@ -285,11 +248,6 @@ async def admin_list_complaints_callback(
     await send_admin_profiles(callback.message, profiles, "Анкет с жалобами нет.", state, "complaints")
 
 
-def parse_admin_nav_payload(payload: str) -> tuple[str, int]:
-    scope, profile_id = payload.split(":", maxsplit=1)
-    return scope, int(profile_id)
-
-
 def parse_admin_complaints_payload(payload: str) -> tuple[int, int]:
     profile_id, offset = payload.split(":", maxsplit=1)
     return int(profile_id), int(offset)
@@ -306,70 +264,35 @@ def build_complaints_text(profile_id: int, complaints: list, offset: int) -> str
     return "\n".join(lines).strip()
 
 
-@router.callback_query(F.data.startswith(ADMIN_NAV_PREV_PREFIX))
-async def admin_nav_prev_callback(
-    callback: CallbackQuery,
-    db: Database,
-    settings: Settings,
-    state: FSMContext,
-) -> None:
-    if callback.data is None or callback.message is None:
-        await safe_callback_answer(callback)
-        return
-    if not await ensure_admin_callback(callback, settings):
-        return
-
-    scope, current_profile_id = parse_admin_nav_payload(
-        callback.data.removeprefix(ADMIN_NAV_PREV_PREFIX)
-    )
-    async with db.session() as session:
-        profiles, empty_text = await get_admin_profiles_by_scope(session, scope)
-
-    if not profiles:
-        await delete_admin_view_messages(callback.message, state)
-        await safe_callback_answer(callback)
-        await safe_answer(callback.message, empty_text)
-        return
-
-    current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
-    prev_index = (current_index - 1) % len(profiles)
-    await safe_callback_answer(callback)
-    await show_admin_profile(
-        callback.message,
-        state,
-        profiles[prev_index],
-        scope,
-        prev_index + 1,
-        len(profiles),
-    )
-
-
-@router.callback_query(F.data.startswith(ADMIN_NAV_NEXT_PREFIX))
+@router.callback_query(F.data == ADMIN_NEXT_CALLBACK)
 async def admin_nav_next_callback(
     callback: CallbackQuery,
     db: Database,
     settings: Settings,
     state: FSMContext,
 ) -> None:
-    if callback.data is None or callback.message is None:
+    if callback.message is None:
         await safe_callback_answer(callback)
         return
     if not await ensure_admin_callback(callback, settings):
         return
 
-    scope, current_profile_id = parse_admin_nav_payload(
-        callback.data.removeprefix(ADMIN_NAV_NEXT_PREFIX)
-    )
+    data = await state.get_data()
+    scope = data.get(ADMIN_VIEW_SCOPE_KEY)
+    current_index = data.get(ADMIN_VIEW_INDEX_KEY)
+    if not isinstance(scope, str):
+        scope = "all"
+    if not isinstance(current_index, int):
+        current_index = -1
+
     async with db.session() as session:
         profiles, empty_text = await get_admin_profiles_by_scope(session, scope)
 
     if not profiles:
-        await delete_admin_view_messages(callback.message, state)
         await safe_callback_answer(callback)
         await safe_answer(callback.message, empty_text)
         return
 
-    current_index = next((index for index, item in enumerate(profiles) if item.id == current_profile_id), 0)
     next_index = (current_index + 1) % len(profiles)
     await safe_callback_answer(callback)
     await show_admin_profile(
