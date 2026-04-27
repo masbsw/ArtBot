@@ -36,7 +36,6 @@ from app.services.admin_profiles import (
     list_all_profiles,
     list_hidden_profiles,
     list_profiles_with_complaints,
-    restore_profile,
     set_user_blocked,
 )
 from app.services.profile_cards import send_profile_card
@@ -409,20 +408,6 @@ async def admin_broadcast_callback(
     await state.set_state(AdminFlow.waiting_for_broadcast)
     await safe_callback_answer(callback)
     await safe_answer(callback.message, "Отправьте текст рассылки одним сообщением.")
-
-
-@router.callback_query(F.data.startswith(ADMIN_RESTORE_PROFILE_PREFIX))
-async def restore_profile_callback(
-    callback: CallbackQuery,
-    db: Database,
-    settings: Settings,
-) -> None:
-    if callback.data is None or not await ensure_admin_callback(callback, settings):
-        return
-    profile_id = int(callback.data.removeprefix(ADMIN_RESTORE_PROFILE_PREFIX))
-    async with db.session() as session:
-        success = await restore_profile(session, profile_id)
-    await safe_callback_answer(callback, "Анкета восстановлена." if success else "Анкета не найдена.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_DELETE_PROFILE_PREFIX))
