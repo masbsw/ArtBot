@@ -93,7 +93,7 @@ class ArtistProfile(TimestampMixin, Base):
     format: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    price_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    price_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     price_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     deadline_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     contacts_text: Mapped[str | None] = mapped_column(Text, nullable=True)
