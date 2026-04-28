@@ -93,13 +93,13 @@ async def ensure_bot_ready(bot: Bot) -> None:
 
 async def run_polling(settings: Settings) -> None:
     database = Database(settings)
+    dispatcher = setup_dispatcher()
 
     try:
         await database.check_connection()
         restart_count = 0
         while True:
             bot = create_bot(settings)
-            dispatcher = setup_dispatcher()
             try:
                 await ensure_bot_ready(bot)
                 logger.info("Starting polling loop")
