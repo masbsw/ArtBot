@@ -1,3 +1,5 @@
+import logging
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -46,6 +48,7 @@ from app.services.users import get_user_by_telegram_id
 from app.states.artist import ArtistFlow
 
 router = Router(name="artist")
+logger = logging.getLogger(__name__)
 
 EDITABLE_FIELD_NAMES = {value for _, value in EDITABLE_PROFILE_FIELDS}
 
@@ -232,34 +235,51 @@ async def finish_artist_profile_update(
     message: Message,
     state: FSMContext,
     db: Database,
-) -> None:
-    state_data = await state.get_data()
-    actor_telegram_id = state_data.get("actor_telegram_id")
-    if actor_telegram_id is None and message.from_user is not None:
-        actor_telegram_id = message.from_user.id
-    if actor_telegram_id is None:
-        await safe_answer(message, "Не удалось определить пользователя Telegram.")
-        return
+) -> bool:
+    try:
+        state_data = await state.get_data()
+        actor_telegram_id = state_data.get("actor_telegram_id")
+        if actor_telegram_id is None and message.from_user is not None:
+            actor_telegram_id = message.from_user.id
+        if actor_telegram_id is None:
+            await safe_answer(message, "Не удалось определить пользователя Telegram.")
+            return False
 
-    async with db.session() as session:
-        user = await get_user_by_telegram_id(session, actor_telegram_id)
-        if user is None or user.role != UserRole.ARTIST:
-            await safe_answer(message, artist_access_denied_text())
-            await state.clear()
-            return
+        async with db.session() as session:
+            user = await get_user_by_telegram_id(session, actor_telegram_id)
+            if user is None or user.role != UserRole.ARTIST:
+                await safe_answer(message, artist_access_denied_text())
+                return False
 
-        profile = await get_artist_profile(session, user.id)
-        form_data = build_artist_form_data(profile, state_data)
-        profile = await upsert_artist_profile(session, user.id, form_data)
+            profile = await get_artist_profile(session, user.id)
+            form_data = build_artist_form_data(profile, state_data)
+            profile = await upsert_artist_profile(session, user.id, form_data)
 
-    await state.clear()
-    await send_profile_card(
-        message,
-        profile,
-        reply_markup=profile_actions_keyboard(),
-        title="Моя анкета",
-    )
-    await send_artist_menu_after_edit(message)
+        await state.clear()
+        await safe_answer(message, "Анкета сохранена ✅")
+
+        try:
+            await send_profile_card(
+                message,
+                profile,
+                reply_markup=profile_actions_keyboard(),
+                title="Моя анкета",
+            )
+        except Exception:
+            logger.exception("artist_profile_card_send_failed user_id=%s", actor_telegram_id)
+
+        try:
+            await send_artist_menu_after_edit(message)
+        except Exception:
+            logger.exception("artist_menu_send_failed user_id=%s", actor_telegram_id)
+        return True
+    except Exception:
+        logger.exception("artist_finish_profile_update_failed")
+        await safe_answer(
+            message,
+            "Не получилось сохранить анкету. Попробуйте отправить контакты ещё раз обычным текстом."
+        )
+        return False
 
 
 async def start_single_field_edit(message: Message, db: Database, state: FSMContext) -> None:
@@ -674,19 +694,40 @@ async def set_contacts_text(
     state: FSMContext,
     db: Database,
 ) -> None:
+    logger.info(
+        "artist_contacts_handler_entered user_id=%s text_len=%s state=%s",
+        message.from_user.id if message.from_user else None,
+        len(message.text or ""),
+        await state.get_state(),
+    )
     contacts_text = message.text.strip()
     if not contacts_text:
         await safe_fsm_answer(message, "Контакты не должны быть пустыми.")
         return
     if contacts_have_links(contacts_text):
+        logger.info(
+            "artist_contacts_validation_failed user_id=%s text=%r",
+            message.from_user.id if message.from_user else None,
+            contacts_text,
+        )
         await safe_fsm_answer(
             message,
             "Контакты должны быть без ссылок на сайты. Уберите URL и домены."
         )
         return
 
+    logger.info(
+        "artist_contacts_before_save user_id=%s text=%r",
+        message.from_user.id if message.from_user else None,
+        contacts_text,
+    )
     await state.update_data(contacts_text=contacts_text)
-    await finish_artist_profile_update(message, state, db)
+    saved = await finish_artist_profile_update(message, state, db)
+    if saved:
+        logger.info(
+            "artist_contacts_saved user_id=%s",
+            message.from_user.id if message.from_user else None,
+        )
 
 
 @router.callback_query(ArtistFlow.waiting_for_edit_field, ~F.data.startswith("admin:"))
@@ -696,9 +737,13 @@ async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
 
 @router.message(ArtistFlow.waiting_for_description)
 @router.message(ArtistFlow.waiting_for_price_text)
-@router.message(ArtistFlow.waiting_for_contacts_text)
 async def invalid_text_input(message: Message) -> None:
     await safe_fsm_answer(message, "На этом шаге ожидается текстовое сообщение.")
+
+
+@router.message(ArtistFlow.waiting_for_contacts_text)
+async def invalid_contacts_input(message: Message) -> None:
+    await safe_fsm_answer(message, "На этом шаге отправьте контакты обычным текстом.")
 
 
 @router.callback_query(ArtistFlow.waiting_for_currency, ~F.data.startswith("admin:"))

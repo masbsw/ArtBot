@@ -25,7 +25,7 @@ DEADLINE_CATEGORY_LABELS: dict[str, str] = {
 }
 
 CONTACT_LINK_PATTERN = re.compile(
-    r"(https?://|www\.|(?:[a-z0-9-]+\.)+[a-z]{2,})",
+    r"(https?://|t\.me/|telegram\.me/|www\.|\b[a-z0-9-]+\.(?:ru|com|net|org|site|online)\b)",
     re.IGNORECASE,
 )
 
