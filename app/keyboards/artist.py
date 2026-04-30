@@ -40,6 +40,7 @@ EDITABLE_PROFILE_FIELDS = [
     ("Сроки", "deadline"),
     ("Контакты", "contacts"),
 ]
+CANCEL_BUTTON_TEXT = "❌ Отменить"
 
 
 def build_option_keyboard(
@@ -93,7 +94,18 @@ def deadline_category_keyboard(current_value: str | None = None) -> InlineKeyboa
 
 def portfolio_finish_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Готово")]],
+        keyboard=[
+            [KeyboardButton(text="Готово")],
+            [KeyboardButton(text=CANCEL_BUTTON_TEXT)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def cancel_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CANCEL_BUTTON_TEXT)]],
         resize_keyboard=True,
         one_time_keyboard=True,
     )
