@@ -96,26 +96,40 @@ async def state_matches(state: FSMContext, expected_state: ArtistFlow) -> bool:
     return await state.get_state() == expected_state.state
 
 
+async def can_cancel_current_edit(state: FSMContext) -> bool:
+    data = await state.get_data()
+    return bool(data.get("can_cancel_edit"))
+
+
 async def start_artist_profile_flow(
     target: Message,
     state: FSMContext,
     actor_telegram_id: int | None = None,
+    can_cancel_edit: bool = False,
 ) -> None:
     await state.clear()
     await state.update_data(
         edit_mode="full",
         edit_field=None,
         actor_telegram_id=actor_telegram_id,
+        can_cancel_edit=can_cancel_edit,
     )
     await state.set_state(ArtistFlow.waiting_for_format)
     if not await state_matches(state, ArtistFlow.waiting_for_format):
         return
+    if can_cancel_edit:
+        await safe_fsm_answer(
+            target,
+            "Шаг 1 из 7. Выберите формат работы или нажмите ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        await safe_fsm_answer(target, "Выберите формат:", reply_markup=format_keyboard())
+        return
     await safe_fsm_answer(
         target,
-        "Шаг 1 из 7. Выберите формат работы или нажмите ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 1 из 7. Выберите формат работы:",
+        reply_markup=format_keyboard(),
     )
-    await safe_fsm_answer(target, "Выберите формат:", reply_markup=format_keyboard())
 
 
 async def prompt_portfolio_step(target: Message | CallbackQuery, state: FSMContext) -> None:
@@ -125,11 +139,17 @@ async def prompt_portfolio_step(target: Message | CallbackQuery, state: FSMConte
     data = await state.get_data()
     if data.get("edit_field") != "portfolio":
         await state.update_data(portfolio_images=[])
-    text = (
-        f"Шаг 2 из 7. Отправьте до {MAX_PORTFOLIO_IMAGES} изображений по одному сообщению.\n"
-        "Когда закончите, нажмите кнопку <b>Готово</b>.\n"
-        "Или нажмите ❌ Отменить."
-    )
+    if await can_cancel_current_edit(state):
+        text = (
+            f"Шаг 2 из 7. Отправьте до {MAX_PORTFOLIO_IMAGES} изображений по одному сообщению.\n"
+            "Когда закончите, нажмите кнопку <b>Готово</b>.\n"
+            "Или нажмите ❌ Отменить."
+        )
+    else:
+        text = (
+            f"Шаг 2 из 7. Отправьте до {MAX_PORTFOLIO_IMAGES} изображений по одному сообщению.\n"
+            "Когда закончите, нажмите кнопку <b>Готово</b>."
+        )
     if isinstance(target, CallbackQuery) and target.message is not None:
         await safe_fsm_answer(target.message, text, reply_markup=portfolio_finish_keyboard())
     else:
@@ -140,11 +160,17 @@ async def prompt_description_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_description)
     if not await state_matches(state, ArtistFlow.waiting_for_description):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            "Шаг 5 из 7. Напишите краткое описание себя и услуг.\n"
+            "Отправь новый текст или нажми ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        return
     await safe_fsm_answer(
         message,
-        "Шаг 5 из 7. Напишите краткое описание себя и услуг.\n"
-        "Отправь новый текст или нажми ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 5 из 7. Напишите краткое описание себя и услуг.",
     )
 
 
@@ -152,37 +178,59 @@ async def prompt_currency_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_currency)
     if not await state_matches(state, ArtistFlow.waiting_for_currency):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            "Шаг 3 из 7. Выберите валюту или нажмите ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        await safe_fsm_answer(message, "Выберите валюту:", reply_markup=currency_keyboard())
+        return
     await safe_fsm_answer(
         message,
-        "Шаг 3 из 7. Выберите валюту или нажмите ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 3 из 7. Выберите валюту:",
+        reply_markup=currency_keyboard(),
     )
-    await safe_fsm_answer(message, "Выберите валюту:", reply_markup=currency_keyboard())
 
 
 async def prompt_currency_step_after_portfolio(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_currency)
     if not await state_matches(state, ArtistFlow.waiting_for_currency):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            f"Портфолио заполнено: {MAX_PORTFOLIO_IMAGES}/{MAX_PORTFOLIO_IMAGES}.\n\n"
+            "Шаг 3 из 7. Выберите валюту или нажмите ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        await safe_fsm_answer(message, "Выберите валюту:", reply_markup=currency_keyboard())
+        return
     await safe_fsm_answer(
         message,
         f"Портфолио заполнено: {MAX_PORTFOLIO_IMAGES}/{MAX_PORTFOLIO_IMAGES}.\n\n"
-        "Шаг 3 из 7. Выберите валюту или нажмите ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 3 из 7. Выберите валюту:",
+        reply_markup=currency_keyboard(),
     )
-    await safe_fsm_answer(message, "Выберите валюту:", reply_markup=currency_keyboard())
 
 
 async def prompt_price_text_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_price_text)
     if not await state_matches(state, ArtistFlow.waiting_for_price_text):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            "Шаг 4 из 7. Укажите цену в свободной форме.\n"
+            "В анкете она будет показана как: ваш текст (валюта).\n"
+            "Отправь новый текст или нажми ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        return
     await safe_fsm_answer(
         message,
         "Шаг 4 из 7. Укажите цену в свободной форме.\n"
-        "В анкете она будет показана как: ваш текст (валюта).\n"
-        "Отправь новый текст или нажми ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "В анкете она будет показана как: ваш текст (валюта)."
     )
 
 
@@ -190,23 +238,36 @@ async def prompt_deadline_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_deadline_category)
     if not await state_matches(state, ArtistFlow.waiting_for_deadline_category):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            "Шаг 6 из 7. Выберите категорию сроков или нажмите ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        await safe_fsm_answer(message, "Выберите категорию сроков:", reply_markup=deadline_category_keyboard())
+        return
     await safe_fsm_answer(
         message,
-        "Шаг 6 из 7. Выберите категорию сроков или нажмите ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 6 из 7. Выберите категорию сроков:",
+        reply_markup=deadline_category_keyboard(),
     )
-    await safe_fsm_answer(message, "Выберите категорию сроков:", reply_markup=deadline_category_keyboard())
 
 
 async def prompt_contacts_step(message: Message, state: FSMContext) -> None:
     await state.set_state(ArtistFlow.waiting_for_contacts_text)
     if not await state_matches(state, ArtistFlow.waiting_for_contacts_text):
         return
+    if await can_cancel_current_edit(state):
+        await safe_fsm_answer(
+            message,
+            "Шаг 7 из 7. Отправьте контакты текстом без ссылок на сайты.\n"
+            "Отправь новый текст или нажми ❌ Отменить.",
+            reply_markup=cancel_reply_keyboard(),
+        )
+        return
     await safe_fsm_answer(
         message,
-        "Шаг 7 из 7. Отправьте контакты текстом без ссылок на сайты.\n"
-        "Отправь новый текст или нажми ❌ Отменить.",
-        reply_markup=cancel_reply_keyboard(),
+        "Шаг 7 из 7. Отправьте контакты текстом без ссылок на сайты.",
     )
 
 
@@ -350,6 +411,7 @@ async def start_single_field_edit(message: Message, db: Database, state: FSMCont
         edit_mode="field",
         edit_field=None,
         actor_telegram_id=message.from_user.id,
+        can_cancel_edit=True,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
     await safe_fsm_answer(
@@ -390,15 +452,23 @@ async def start_single_field_edit_callback(
             edit_mode="full",
             edit_field=None,
             actor_telegram_id=callback.from_user.id,
+            can_cancel_edit=False,
         )
         await state.set_state(ArtistFlow.waiting_for_format)
         if await state_matches(state, ArtistFlow.waiting_for_format):
-            await safe_fsm_answer(
-                callback.message,
-                "Шаг 1 из 7. Выберите формат работы или нажмите ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
-            await safe_fsm_answer(callback.message, "Выберите формат:", reply_markup=format_keyboard())
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    callback.message,
+                    "Шаг 1 из 7. Выберите формат работы или нажмите ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+                await safe_fsm_answer(callback.message, "Выберите формат:", reply_markup=format_keyboard())
+            else:
+                await safe_fsm_answer(
+                    callback.message,
+                    "Шаг 1 из 7. Выберите формат работы:",
+                    reply_markup=format_keyboard(),
+                )
         return
 
     await safe_callback_answer(callback)
@@ -407,6 +477,7 @@ async def start_single_field_edit_callback(
         edit_mode="field",
         edit_field=None,
         actor_telegram_id=callback.from_user.id,
+        can_cancel_edit=True,
     )
     await state.set_state(ArtistFlow.waiting_for_edit_field)
     await safe_fsm_answer(
@@ -435,12 +506,15 @@ async def prompt_selected_field(
     if field_name == "format":
         await state.set_state(ArtistFlow.waiting_for_format)
         if await state_matches(state, ArtistFlow.waiting_for_format):
-            await safe_fsm_answer(
-                target_message,
-                "Выберите новый формат или нажмите ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
-            await safe_fsm_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    target_message,
+                    "Выберите новый формат или нажмите ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+                await safe_fsm_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
+            else:
+                await safe_fsm_answer(target_message, "Выберите новый формат:", reply_markup=format_keyboard())
         return
     if field_name == "portfolio":
         await state.update_data(portfolio_images=[])
@@ -449,46 +523,62 @@ async def prompt_selected_field(
     if field_name == "description":
         await state.set_state(ArtistFlow.waiting_for_description)
         if await state_matches(state, ArtistFlow.waiting_for_description):
-            await safe_fsm_answer(
-                target_message,
-                "Отправьте новое описание.\n"
-                "Отправь новый текст или нажми ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    target_message,
+                    "Отправьте новое описание.\n"
+                    "Отправь новый текст или нажми ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+            else:
+                await safe_fsm_answer(target_message, "Отправьте новое описание.")
         return
     if field_name == "price":
         await state.set_state(ArtistFlow.waiting_for_currency)
         if await state_matches(state, ArtistFlow.waiting_for_currency):
-            await safe_fsm_answer(
-                target_message,
-                "Выберите валюту или нажмите ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
-            await safe_fsm_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    target_message,
+                    "Выберите валюту или нажмите ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+                await safe_fsm_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
+            else:
+                await safe_fsm_answer(target_message, "Выберите валюту:", reply_markup=currency_keyboard())
         return
     if field_name == "deadline":
         await state.set_state(ArtistFlow.waiting_for_deadline_category)
         if await state_matches(state, ArtistFlow.waiting_for_deadline_category):
-            await safe_fsm_answer(
-                target_message,
-                "Выберите новые сроки или нажмите ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
-            await safe_fsm_answer(
-                target_message,
-                "Выберите новые сроки:",
-                reply_markup=deadline_category_keyboard(),
-            )
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    target_message,
+                    "Выберите новые сроки или нажмите ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+                await safe_fsm_answer(
+                    target_message,
+                    "Выберите новые сроки:",
+                    reply_markup=deadline_category_keyboard(),
+                )
+            else:
+                await safe_fsm_answer(
+                    target_message,
+                    "Выберите новые сроки:",
+                    reply_markup=deadline_category_keyboard(),
+                )
         return
     if field_name == "contacts":
         await state.set_state(ArtistFlow.waiting_for_contacts_text)
         if await state_matches(state, ArtistFlow.waiting_for_contacts_text):
-            await safe_fsm_answer(
-                target_message,
-                "Отправьте новые контакты без ссылок.\n"
-                "Отправь новый текст или нажми ❌ Отменить.",
-                reply_markup=cancel_reply_keyboard(),
-            )
+            if await can_cancel_current_edit(state):
+                await safe_fsm_answer(
+                    target_message,
+                    "Отправьте новые контакты без ссылок.\n"
+                    "Отправь новый текст или нажми ❌ Отменить.",
+                    reply_markup=cancel_reply_keyboard(),
+                )
+            else:
+                await safe_fsm_answer(target_message, "Отправьте новые контакты без ссылок.")
 
 
 async def send_profile_view(message: Message, db: Database) -> None:
@@ -524,6 +614,13 @@ async def cancel_artist_flow(message: Message, state: FSMContext, db: Database) 
     if current_state is None or not current_state.startswith("ArtistFlow:"):
         return
 
+    if not await can_cancel_current_edit(state):
+        await safe_answer(
+            message,
+            "Создание анкеты ещё не завершено. Продолжите заполнение или используйте /start."
+        )
+        return
+
     await state.clear()
     await safe_answer(
         message,
@@ -537,10 +634,17 @@ async def cancel_artist_flow(message: Message, state: FSMContext, db: Database) 
 async def edit_profile_command(message: Message, db: Database, state: FSMContext) -> None:
     if not await ensure_artist_access(message, db):
         return
+    can_cancel_edit = False
+    if message.from_user is not None:
+        async with db.session() as session:
+            user = await get_user_by_telegram_id(session, message.from_user.id)
+            if user is not None and user.role == UserRole.ARTIST:
+                can_cancel_edit = await get_artist_profile(session, user.id) is not None
     await start_artist_profile_flow(
         message,
         state,
         actor_telegram_id=message.from_user.id if message.from_user else None,
+        can_cancel_edit=can_cancel_edit,
     )
 
 
@@ -572,11 +676,17 @@ async def edit_profile_callback(
 ) -> None:
     if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
         return
+    can_cancel_edit = False
+    async with db.session() as session:
+        user = await get_user_by_telegram_id(session, callback.from_user.id)
+        if user is not None and user.role == UserRole.ARTIST:
+            can_cancel_edit = await get_artist_profile(session, user.id) is not None
     await safe_callback_answer(callback)
     await start_artist_profile_flow(
         callback.message,
         state,
         actor_telegram_id=callback.from_user.id,
+        can_cancel_edit=can_cancel_edit,
     )
 
 
