@@ -710,7 +710,15 @@ async def disable_profile_callback(
     callback: CallbackQuery,
     db: Database,
 ) -> None:
-    if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
+    if callback.message is None or callback.from_user is None:
+        await safe_callback_answer(callback)
+        return
+    logger.info(
+        "artist_disable_profile_clicked user_id=%s data=%s",
+        callback.from_user.id,
+        callback.data,
+    )
+    if not await ensure_artist_access_callback(callback, db):
         return
     await safe_callback_answer(callback)
     await safe_edit_text(
@@ -718,6 +726,7 @@ async def disable_profile_callback(
         "Вы точно хотите отключить анкету?",
         reply_markup=disable_profile_confirm_keyboard(),
     )
+    logger.info("artist_disable_profile_confirm_shown user_id=%s", callback.from_user.id)
 
 
 @router.callback_query(F.data == DISABLE_PROFILE_CANCEL_CALLBACK)
@@ -733,6 +742,7 @@ async def disable_profile_cancel_callback(
         "Действия:",
         reply_markup=profile_actions_keyboard(),
     )
+    logger.info("artist_disable_profile_cancelled user_id=%s", callback.from_user.id)
 
 
 @router.callback_query(F.data == DISABLE_PROFILE_CONFIRM_CALLBACK)
@@ -760,6 +770,7 @@ async def disable_profile_confirm_callback(
         return
 
     await state.clear()
+    logger.info("artist_disable_profile_confirmed user_id=%s", callback.from_user.id)
     await safe_answer(
         callback.message,
         "Анкета отключена. Вы можете заполнить новую через «Изменить анкету».",
@@ -996,7 +1007,10 @@ async def set_contacts_text(
         )
 
 
-@router.callback_query(ArtistFlow.waiting_for_edit_field, ~F.data.startswith("admin:"))
+@router.callback_query(
+    ArtistFlow.waiting_for_edit_field,
+    (~F.data.startswith("admin:")) & (~F.data.startswith("artist:")),
+)
 async def invalid_edit_field_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "Выберите поле кнопкой ниже.", show_alert=True)
 
@@ -1012,7 +1026,13 @@ async def invalid_contacts_input(message: Message) -> None:
     await safe_fsm_answer(message, "На этом шаге отправьте контакты обычным текстом.")
 
 
-@router.callback_query(ArtistFlow.waiting_for_currency, ~F.data.startswith("admin:"))
-@router.callback_query(ArtistFlow.waiting_for_deadline_category, ~F.data.startswith("admin:"))
+@router.callback_query(
+    ArtistFlow.waiting_for_currency,
+    (~F.data.startswith("admin:")) & (~F.data.startswith("artist:")),
+)
+@router.callback_query(
+    ArtistFlow.waiting_for_deadline_category,
+    (~F.data.startswith("admin:")) & (~F.data.startswith("artist:")),
+)
 async def invalid_option_callback(callback: CallbackQuery) -> None:
     await safe_callback_answer(callback, "Выберите вариант кнопкой ниже.", show_alert=True)
