@@ -721,11 +721,19 @@ async def disable_profile_callback(
     if not await ensure_artist_access_callback(callback, db):
         return
     await safe_callback_answer(callback)
-    await safe_edit_text(
+    sent = await safe_answer(
         callback.message,
         "Вы точно хотите отключить анкету?",
         reply_markup=disable_profile_confirm_keyboard(),
     )
+    if sent is None:
+        logger.warning("artist_disable_profile_confirm_send_failed user_id=%s", callback.from_user.id)
+        await safe_callback_answer(
+            callback,
+            "Не удалось показать подтверждение. Попробуйте ещё раз.",
+            show_alert=True,
+        )
+        return
     logger.info("artist_disable_profile_confirm_shown user_id=%s", callback.from_user.id)
 
 
