@@ -15,7 +15,7 @@ from app.keyboards.start import (
     change_role_keyboard,
     role_selection_keyboard,
 )
-from app.services.artist_profiles import get_artist_profile
+from app.services.artist_profiles import get_artist_profile, is_active_artist_profile
 from app.services.client_filters import get_client_filter
 from app.services.telegram_api import (
     enforce_callback_rate_limit,
@@ -88,7 +88,7 @@ async def continue_role_onboarding(
 
         if fresh_user.role == UserRole.ARTIST:
             profile = await get_artist_profile(session, fresh_user.id)
-            if profile is None:
+            if not is_active_artist_profile(profile):
                 return "artist_onboarding"
 
         if fresh_user.role == UserRole.CLIENT:

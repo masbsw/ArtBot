@@ -26,6 +26,7 @@ async def list_all_profiles(session: AsyncSession) -> list[ArtistProfile]:
             selectinload(ArtistProfile.portfolio_images),
             joinedload(ArtistProfile.user),
         )
+        .where(ArtistProfile.status == ArtistProfileStatus.ACTIVE)
         .order_by(ArtistProfile.id.desc())
     )
     return list(result.scalars().unique())

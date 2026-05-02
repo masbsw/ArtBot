@@ -31,6 +31,9 @@ DEADLINE_CALLBACK_PREFIX = "artist:deadline:"
 EDIT_PROFILE_CALLBACK = "artist:edit_profile"
 EDIT_PROFILE_FIELD_CALLBACK = "artist:edit_profile_field"
 EDIT_FIELD_CALLBACK_PREFIX = "artist:edit_field:"
+DISABLE_PROFILE_CALLBACK = "artist:disable_profile"
+DISABLE_PROFILE_CONFIRM_CALLBACK = "artist:disable_profile:confirm"
+DISABLE_PROFILE_CANCEL_CALLBACK = "artist:disable_profile:cancel"
 
 EDITABLE_PROFILE_FIELDS = [
     ("Формат", "format"),
@@ -129,6 +132,29 @@ def profile_actions_keyboard() -> InlineKeyboardMarkup:
                     text="🧩 Редактировать отдельно",
                     callback_data=EDIT_PROFILE_FIELD_CALLBACK,
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚫 Отключить анкету",
+                    callback_data=DISABLE_PROFILE_CALLBACK,
+                )
+            ],
+        ]
+    )
+
+
+def disable_profile_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да",
+                    callback_data=DISABLE_PROFILE_CONFIRM_CALLBACK,
+                ),
+                InlineKeyboardButton(
+                    text="❌ Нет",
+                    callback_data=DISABLE_PROFILE_CANCEL_CALLBACK,
+                ),
             ]
         ]
     )

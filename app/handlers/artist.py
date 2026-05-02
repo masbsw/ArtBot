@@ -17,6 +17,9 @@ from app.keyboards.artist import (
     CANCEL_BUTTON_TEXT,
     CURRENCY_CALLBACK_PREFIX,
     DEADLINE_CALLBACK_PREFIX,
+    DISABLE_PROFILE_CALLBACK,
+    DISABLE_PROFILE_CANCEL_CALLBACK,
+    DISABLE_PROFILE_CONFIRM_CALLBACK,
     EDITABLE_PROFILE_FIELDS,
     EDIT_FIELD_CALLBACK_PREFIX,
     EDIT_PROFILE_CALLBACK,
@@ -25,6 +28,7 @@ from app.keyboards.artist import (
     cancel_reply_keyboard,
     currency_keyboard,
     deadline_category_keyboard,
+    disable_profile_confirm_keyboard,
     format_keyboard,
     portfolio_finish_keyboard,
     profile_field_selection_keyboard,
@@ -33,8 +37,10 @@ from app.keyboards.artist import (
 from app.services.artist_profiles import (
     MAX_PORTFOLIO_IMAGES,
     contacts_have_links,
+    disable_artist_profile,
     get_artist_profile,
     humanize_deadline_category,
+    is_active_artist_profile,
     upsert_artist_profile,
 )
 from app.services.profile_cards import build_profile_caption, send_profile_card
@@ -313,7 +319,7 @@ async def send_profile_view_with_fallback(message: Message, db: Database) -> Non
             return
         profile = await get_artist_profile(session, user.id)
 
-    if profile is None:
+    if not is_active_artist_profile(profile):
         await safe_answer(message, "Анкета пока не заполнена.")
         return
 
@@ -401,7 +407,7 @@ async def start_single_field_edit(message: Message, db: Database, state: FSMCont
             return
         profile = await get_artist_profile(session, user.id)
 
-    if profile is None:
+    if not is_active_artist_profile(profile):
         await safe_answer(message, "Анкета пока не заполнена. Сначала заполните её полностью.")
         await start_artist_profile_flow(message, state, actor_telegram_id=message.from_user.id)
         return
@@ -444,7 +450,7 @@ async def start_single_field_edit_callback(
             return
         profile = await get_artist_profile(session, user.id)
 
-    if profile is None:
+    if not is_active_artist_profile(profile):
         await safe_callback_answer(callback)
         await safe_answer(callback.message, "Анкета пока не заполнена. Сначала заполните её полностью.")
         await state.clear()
@@ -593,7 +599,7 @@ async def send_profile_view(message: Message, db: Database) -> None:
             return
         profile = await get_artist_profile(session, user.id)
 
-    if profile is None:
+    if not is_active_artist_profile(profile):
         await safe_answer(
             message,
             "Анкета пока не заполнена. Используйте /edit_profile, чтобы создать её."
@@ -639,7 +645,7 @@ async def edit_profile_command(message: Message, db: Database, state: FSMContext
         async with db.session() as session:
             user = await get_user_by_telegram_id(session, message.from_user.id)
             if user is not None and user.role == UserRole.ARTIST:
-                can_cancel_edit = await get_artist_profile(session, user.id) is not None
+                can_cancel_edit = is_active_artist_profile(await get_artist_profile(session, user.id))
     await start_artist_profile_flow(
         message,
         state,
@@ -680,7 +686,7 @@ async def edit_profile_callback(
     async with db.session() as session:
         user = await get_user_by_telegram_id(session, callback.from_user.id)
         if user is not None and user.role == UserRole.ARTIST:
-            can_cancel_edit = await get_artist_profile(session, user.id) is not None
+            can_cancel_edit = is_active_artist_profile(await get_artist_profile(session, user.id))
     await safe_callback_answer(callback)
     await start_artist_profile_flow(
         callback.message,
@@ -697,6 +703,68 @@ async def edit_profile_field_callback(
     state: FSMContext,
 ) -> None:
     await start_single_field_edit_callback(callback, db, state)
+
+
+@router.callback_query(F.data == DISABLE_PROFILE_CALLBACK)
+async def disable_profile_callback(
+    callback: CallbackQuery,
+    db: Database,
+) -> None:
+    if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
+        return
+    await safe_callback_answer(callback)
+    await safe_edit_text(
+        callback.message,
+        "Вы точно хотите отключить анкету?",
+        reply_markup=disable_profile_confirm_keyboard(),
+    )
+
+
+@router.callback_query(F.data == DISABLE_PROFILE_CANCEL_CALLBACK)
+async def disable_profile_cancel_callback(
+    callback: CallbackQuery,
+    db: Database,
+) -> None:
+    if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
+        return
+    await safe_callback_answer(callback)
+    await safe_edit_text(
+        callback.message,
+        "Действия:",
+        reply_markup=profile_actions_keyboard(),
+    )
+
+
+@router.callback_query(F.data == DISABLE_PROFILE_CONFIRM_CALLBACK)
+async def disable_profile_confirm_callback(
+    callback: CallbackQuery,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    if callback.message is None or callback.from_user is None or not await ensure_artist_access_callback(callback, db):
+        return
+
+    async with db.session() as session:
+        user = await get_user_by_telegram_id(session, callback.from_user.id)
+        if user is None or user.role != UserRole.ARTIST:
+            await safe_callback_answer(callback, "Доступно только для роли Художник.", show_alert=True)
+            return
+        success = await disable_artist_profile(session, user.id)
+
+    await safe_callback_answer(callback)
+    if not success:
+        await safe_answer(
+            callback.message,
+            "Анкета пока не заполнена. Нажмите «Изменить анкету», чтобы создать её."
+        )
+        return
+
+    await state.clear()
+    await safe_answer(
+        callback.message,
+        "Анкета отключена. Вы можете заполнить новую через «Изменить анкету».",
+        reply_markup=role_menu_keyboard(UserRole.ARTIST),
+    )
 
 
 @router.callback_query(

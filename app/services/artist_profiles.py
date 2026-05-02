@@ -42,6 +42,10 @@ async def get_artist_profile(
     return result.scalar_one_or_none()
 
 
+def is_active_artist_profile(profile: ArtistProfile | None) -> bool:
+    return profile is not None and profile.status == ArtistProfileStatus.ACTIVE
+
+
 def contacts_have_links(value: str) -> bool:
     return CONTACT_LINK_PATTERN.search(value) is not None
 
@@ -115,3 +119,16 @@ async def upsert_artist_profile(
     await session.refresh(profile)
     await session.refresh(profile, attribute_names=["portfolio_images"])
     return profile
+
+
+async def disable_artist_profile(
+    session: AsyncSession,
+    user_id: int,
+) -> bool:
+    profile = await get_artist_profile(session, user_id)
+    if profile is None:
+        return False
+
+    profile.status = ArtistProfileStatus.HIDDEN
+    await session.commit()
+    return True
