@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 MAX_PROFILE_CARD_IMAGES = 2
 
 
+async def send_profile_text_fallback(
+    message: Message,
+    caption: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> list[Message]:
+    fallback_text = f"Не удалось загрузить фото анкеты, показываю данные текстом:\n\n{caption}"
+    sent = await safe_answer(message, fallback_text, reply_markup=reply_markup)
+    return [sent] if sent is not None else []
+
+
 def build_profile_caption(profile: ArtistProfile, title: str = "Моя анкета") -> str:
     images_count = len(profile.portfolio_images)
     return (
@@ -71,11 +81,22 @@ async def send_profile_card(
             )
         except TelegramBadRequest:
             logger.warning(
-                "send_profile_card invalid single photo profile_id=%s file_id=%s fallback=text",
+                "send_profile_card invalid single photo profile_id=%s owner_user_id=%s file_id=%s fallback=text",
                 profile.id,
+                profile.user_id,
                 images[0].telegram_file_id,
             )
-            sent = await safe_answer(message, caption, reply_markup=reply_markup)
+            fallback_messages = await send_profile_text_fallback(
+                message,
+                caption,
+                reply_markup=reply_markup,
+            )
+            logger.info(
+                "send_profile_card profile_id=%s mode=text_fallback image_count=1 duration_ms=%.1f",
+                profile.id,
+                (perf_counter() - started_at) * 1000,
+            )
+            return fallback_messages
         logger.info(
             "send_profile_card profile_id=%s mode=single image_count=1 duration_ms=%.1f",
             profile.id,
@@ -100,17 +121,25 @@ async def send_profile_card(
         mode = "media_group"
     except TelegramBadRequest:
         logger.warning(
-            "send_profile_card media_group_failed profile_id=%s image_count=%s fallback=single",
+            "send_profile_card media_group_failed profile_id=%s owner_user_id=%s image_count=%s file_ids=%s fallback=text",
             profile.id,
+            profile.user_id,
             len(images),
+            [item.telegram_file_id for item in images],
         )
-        fallback_message = await safe_answer_photo(
+        sent_messages = await send_profile_text_fallback(
             message,
-            images[0].telegram_file_id,
-            caption=caption,
+            caption,
         )
-        sent_messages = [fallback_message] if fallback_message is not None else []
-        mode = "single_fallback"
+        mode = "text_fallback"
+        logger.info(
+            "send_profile_card profile_id=%s mode=%s image_count=%s duration_ms=%.1f",
+            profile.id,
+            mode,
+            len(images),
+            (perf_counter() - started_at) * 1000,
+        )
+        return sent_messages
     if reply_markup is not None:
         actions_message = await safe_answer(
             message,
