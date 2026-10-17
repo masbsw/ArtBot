@@ -73,6 +73,11 @@ async def get_profile_with_owner(
     return result.scalar_one_or_none()
 
 
+async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
+    result = await session.execute(select(User).where(User.id == user_id))
+    return result.scalar_one_or_none()
+
+
 async def restore_profile(session: AsyncSession, profile_id: int) -> bool:
     profile = await get_profile_with_owner(session, profile_id)
     if profile is None:

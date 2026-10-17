@@ -13,6 +13,7 @@ from app.db.models import (
     ProfileAction,
     ProfileActionType,
 )
+from app.services.client_filters import is_any_deadline_category
 
 COMPLAINT_HIDE_THRESHOLD = 3
 logger = logging.getLogger(__name__)
@@ -38,16 +39,19 @@ async def _query_next_artist_profile(
         .limit(1)
     )
 
-    result = await session.execute(
+    query = (
         select(ArtistProfile)
         .options(selectinload(ArtistProfile.portfolio_images))
         .where(ArtistProfile.status == ArtistProfileStatus.ACTIVE)
         .where(ArtistProfile.format == client_filter.format)
-        .where(ArtistProfile.deadline_category == client_filter.deadline_category)
         .where(~blocked_actions.exists())
         .order_by(ArtistProfile.id.asc())
         .limit(1)
     )
+    if not is_any_deadline_category(client_filter.deadline_category):
+        query = query.where(ArtistProfile.deadline_category == client_filter.deadline_category)
+
+    result = await session.execute(query)
     return result.scalars().unique().first()
 
 

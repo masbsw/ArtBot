@@ -8,7 +8,7 @@ from app.db.models import User, UserRole
 from app.db.session import Database
 from app.handlers.artist import start_artist_profile_flow
 from app.handlers.client import start_client_filters_flow
-from app.keyboards.common import CHANGE_ROLE_BUTTON, role_menu_keyboard
+from app.keyboards.common import CHANGE_ROLE_BUTTON, RULES_BUTTON, role_menu_keyboard
 from app.keyboards.start import (
     CHANGE_ROLE_CALLBACK,
     ROLE_CALLBACK_PREFIX,
@@ -28,6 +28,34 @@ from app.states.artist import ArtistFlow
 from app.states.client import ClientFlow
 
 router = Router(name="start")
+
+RULES_TEXT = """✦ <b>ПРАВИЛА</b>
+
+(Удаление + блокировка⤵️)
+
+1. Запрещено любое использование AI-инструментов в работах.
+
+2. Запрещены анкеты не по тематике бота: всё, что не касается традиционных, диджитал, анимационных, 3D-работ.
+
+3. Запрещены любые посторонние ссылки в анкетах, кроме соцсетей и Telegram-каналов.
+
+4. Запрещены базовые DNI.
+
+5. Запрещена продажа адоптов, аукционы и ючи.
+
+(Удаление⤵️)
+
+6. Незаблюренный NSFW-контент.
+
+7. Отсутствие прайса или контактов для связи в анкете.
+
+8. Отсутствие картинок с примерами работ в анкете.
+
+9. Сломанные анкеты: большой текст, ломающий анкету, изображения не в PNG или JPG.
+
+10. Текст в анкете, не связанный с прайсом, адресованный зрителю или админу, призывающий к каким-либо действиям, завуалированный DNI-текст или тяжёлая брань.
+
+11. Плохое качество или исполнение артов."""
 
 
 def build_active_flow_text(current_state: str) -> str:
@@ -121,7 +149,12 @@ async def start_command(
             is_admin=is_admin_user(message.from_user.id, settings),
         )
 
-    if created or user.role == UserRole.ADMIN:
+    if created:
+        await safe_answer(message, RULES_TEXT)
+        await send_role_selector(message, user, created=True)
+        return
+
+    if user.role == UserRole.ADMIN:
         await send_role_selector(message, user, created)
         return
 
@@ -146,6 +179,12 @@ async def role_command(message: Message, db: Database, settings: Settings) -> No
         "Выберите роль:",
         reply_markup=role_selection_keyboard(user.role),
     )
+
+
+@router.message(Command("rules"))
+@router.message(F.text == RULES_BUTTON)
+async def rules_command(message: Message) -> None:
+    await safe_answer(message, RULES_TEXT)
 
 
 @router.message(F.text == CHANGE_ROLE_BUTTON)

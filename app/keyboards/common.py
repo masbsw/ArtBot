@@ -9,6 +9,7 @@ SET_FILTERS_BUTTON = "⚙️ Фильтры"
 VIEW_PROFILES_BUTTON = "🔎 Смотреть анкеты"
 SAVED_PROFILES_BUTTON = "⭐ Сохраненные"
 CHANGE_ROLE_BUTTON = "🔁 Сменить роль"
+RULES_BUTTON = "📖 Правила"
 
 
 def artist_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -17,7 +18,7 @@ def artist_menu_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=EDIT_PROFILE_BUTTON), KeyboardButton(text=EDIT_PROFILE_FIELD_BUTTON)],
             [KeyboardButton(text=MY_PROFILE_BUTTON), KeyboardButton(text=SAVED_PROFILES_BUTTON)],
             [KeyboardButton(text=VIEW_PROFILES_BUTTON)],
-            [KeyboardButton(text=CHANGE_ROLE_BUTTON)],
+            [KeyboardButton(text=RULES_BUTTON), KeyboardButton(text=CHANGE_ROLE_BUTTON)],
         ],
         resize_keyboard=True,
     )
@@ -28,7 +29,7 @@ def client_menu_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=SET_FILTERS_BUTTON), KeyboardButton(text=VIEW_PROFILES_BUTTON)],
             [KeyboardButton(text=SAVED_PROFILES_BUTTON)],
-            [KeyboardButton(text=CHANGE_ROLE_BUTTON)],
+            [KeyboardButton(text=RULES_BUTTON), KeyboardButton(text=CHANGE_ROLE_BUTTON)],
         ],
         resize_keyboard=True,
     )

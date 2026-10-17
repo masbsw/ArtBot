@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InputMediaPhoto, Message
+from aiogram.types import CallbackQuery, Message
 
 from app.config import Settings
 from app.db.session import Database
@@ -19,6 +19,7 @@ from app.keyboards.admin import (
     ADMIN_COMPLAINTS_PREV_PREFIX,
     ADMIN_COMPLAINTS_VIEW_PREFIX,
     ADMIN_DELETE_PROFILE_PREFIX,
+    ADMIN_FIND_PROFILE_CALLBACK,
     ADMIN_LIST_ALL_CALLBACK,
     ADMIN_LIST_COMPLAINTS_CALLBACK,
     ADMIN_LIST_HIDDEN_CALLBACK,
@@ -26,12 +27,15 @@ from app.keyboards.admin import (
     ADMIN_UNBLOCK_USER_PREFIX,
     admin_complaints_navigation_keyboard,
     admin_broadcast_confirm_keyboard,
+    admin_page_navigation_keyboard,
     admin_panel_keyboard,
     admin_profile_actions_keyboard,
 )
 from app.services.admin_profiles import (
     admin_profile_extra,
     delete_profile,
+    get_profile_with_owner,
+    get_user_by_id,
     list_all_user_telegram_ids,
     list_profile_complaints,
     list_all_profiles,
@@ -42,10 +46,11 @@ from app.services.admin_profiles import (
 from app.services.profile_cards import build_profile_caption
 from app.services.telegram_api import (
     safe_answer,
+    safe_answer_photo,
     safe_callback_answer,
     safe_edit_text,
+    safe_send_photo,
     safe_send_message,
-    telegram_api_semaphore,
 )
 from app.states.admin import AdminFlow
 
@@ -53,10 +58,13 @@ router = Router(name="admin")
 logger = logging.getLogger(__name__)
 
 ADMIN_VIEW_SCOPE_KEY = "admin_view_scope"
-ADMIN_VIEW_INDEX_KEY = "admin_view_index"
+ADMIN_VIEW_OFFSET_KEY = "admin_view_offset"
+BATCH_SIZE = 10
 BROADCAST_BATCH_SIZE = 20
 BROADCAST_BATCH_DELAY_SECONDS = 1
-ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS = 7
+MODERATION_ACTION_KEY = "moderation_action"
+MODERATION_PROFILE_ID_KEY = "moderation_profile_id"
+MODERATION_USER_ID_KEY = "moderation_user_id"
 
 
 def is_admin(telegram_id: int, settings: Settings) -> bool:
@@ -97,25 +105,9 @@ async def get_admin_profiles_by_scope(
     return await list_profiles_with_complaints(session), "Анкет с жалобами нет."
 
 
-async def send_admin_profile_media_group(
-    message: Message,
-    media: list[InputMediaPhoto],
-) -> list[Message]:
-    async with telegram_api_semaphore:
-        return await asyncio.wait_for(
-            message.answer_media_group(
-                media,
-                request_timeout=ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS,
-            ),
-            timeout=ADMIN_MEDIA_GROUP_TIMEOUT_SECONDS,
-        )
-
-
 async def show_admin_profile(
     message: Message,
-    state: FSMContext,
     profile,
-    scope: str,
     current_index: int,
     total_count: int,
 ) -> None:
@@ -127,72 +119,78 @@ async def show_admin_profile(
     if extra_text:
         caption = f"{caption}\n\n{extra_text}"
 
-    sent_card_mode = "text_fallback"
     images = [
         item
         for item in profile.portfolio_images
         if item.telegram_file_id and item.telegram_file_id.strip()
-    ][:2]
+    ][:1]
     if images:
         try:
-            media = [
-                InputMediaPhoto(
-                    media=images[0].telegram_file_id,
-                    caption=caption,
-                )
-            ]
-            if len(images) > 1:
-                media.append(InputMediaPhoto(media=images[1].telegram_file_id))
-            sent_messages = await send_admin_profile_media_group(
+            sent = await safe_answer_photo(
                 message,
-                media,
+                images[0].telegram_file_id,
+                caption=caption,
+                reply_markup=admin_profile_actions_keyboard(
+                    profile_id=profile.id,
+                    user_id=profile.user_id,
+                    complaints_count=profile.complaints_count,
+                ),
             )
-            sent_card_mode = "media_group" if sent_messages else "text_fallback"
+            if sent is not None:
+                logger.info(
+                    "admin_show_profile profile_id=%s index=%s sent_card=photo",
+                    profile.id,
+                    current_index,
+                )
+                return
         except (TelegramBadRequest, TelegramNetworkError, TimeoutError):
-            sent_card_mode = "text_fallback"
+            logger.warning("admin_profile_photo_failed profile_id=%s", profile.id)
 
-    if sent_card_mode == "text_fallback":
-        fallback_text = (
-            "Не удалось загрузить фото анкеты, показываю данные текстом:\n\n"
-            f"{caption}"
-        )
-        await safe_answer(message, fallback_text)
-
-    actions_message = await safe_answer(
+    await safe_answer(
         message,
-        "Действия:",
+        "Не удалось загрузить фото анкеты, показываю данные текстом:\n\n"
+        f"{caption}",
         reply_markup=admin_profile_actions_keyboard(
             profile_id=profile.id,
             user_id=profile.user_id,
+            complaints_count=profile.complaints_count,
         ),
     )
-    sent_actions = actions_message is not None
-    await state.update_data(
-        **{
-            ADMIN_VIEW_SCOPE_KEY: scope,
-            ADMIN_VIEW_INDEX_KEY: current_index - 1,
-        }
-    )
     logger.info(
-        "admin_show_profile profile_id=%s index=%s sent_card=%s sent_actions=%s",
+        "admin_show_profile profile_id=%s index=%s sent_card=text_fallback",
         profile.id,
         current_index,
-        sent_card_mode,
-        sent_actions,
     )
 
 
-async def send_admin_profiles(
+async def send_admin_profiles_page(
     message: Message,
     profiles: list,
     empty_text: str,
     state: FSMContext,
     scope: str,
+    offset: int = 0,
 ) -> None:
     if not profiles:
         await safe_answer(message, empty_text)
         return
-    await show_admin_profile(message, state, profiles[0], scope, 1, len(profiles))
+
+    offset = max(0, min(offset, len(profiles) - 1))
+    page_profiles = profiles[offset : offset + BATCH_SIZE]
+    page_end = offset + len(page_profiles)
+    await safe_answer(message, f"<b>Анкеты {offset + 1}–{page_end} из {len(profiles)}</b>")
+    for index, profile in enumerate(page_profiles, start=offset + 1):
+        await show_admin_profile(message, profile, index, len(profiles))
+
+    await state.update_data(
+        **{
+            ADMIN_VIEW_SCOPE_KEY: scope,
+            ADMIN_VIEW_OFFSET_KEY: offset,
+        }
+    )
+    navigation = admin_page_navigation_keyboard(page_end < len(profiles))
+    if navigation is not None:
+        await safe_answer(message, "Продолжить просмотр:", reply_markup=navigation)
 
 
 @router.message(Command("admin"))
@@ -216,7 +214,7 @@ async def admin_profiles_command(
         return
     async with db.session() as session:
         profiles = await list_all_profiles(session)
-    await send_admin_profiles(message, profiles, "Анкет пока нет.", state, "all")
+    await send_admin_profiles_page(message, profiles, "Анкет пока нет.", state, "all")
 
 
 @router.message(Command("admin_hidden"))
@@ -230,7 +228,7 @@ async def admin_hidden_command(
         return
     async with db.session() as session:
         profiles = await list_hidden_profiles(session)
-    await send_admin_profiles(message, profiles, "Скрытых анкет нет.", state, "hidden")
+    await send_admin_profiles_page(message, profiles, "Скрытых анкет нет.", state, "hidden")
 
 
 @router.message(Command("admin_complaints"))
@@ -244,7 +242,7 @@ async def admin_complaints_command(
         return
     async with db.session() as session:
         profiles = await list_profiles_with_complaints(session)
-    await send_admin_profiles(message, profiles, "Анкет с жалобами нет.", state, "complaints")
+    await send_admin_profiles_page(message, profiles, "Анкет с жалобами нет.", state, "complaints")
 
 
 @router.message(Command("broadcast"))
@@ -257,7 +255,7 @@ async def broadcast_command(
         return
     await state.clear()
     await state.set_state(AdminFlow.waiting_for_broadcast)
-    await safe_answer(message, "Отправьте текст рассылки одним сообщением.")
+    await safe_answer(message, "Отправьте текст или изображение с подписью для рассылки.")
 
 
 @router.callback_query(F.data == ADMIN_LIST_ALL_CALLBACK)
@@ -272,7 +270,7 @@ async def admin_list_all_callback(
     await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_all_profiles(session)
-    await send_admin_profiles(callback.message, profiles, "Анкет пока нет.", state, "all")
+    await send_admin_profiles_page(callback.message, profiles, "Анкет пока нет.", state, "all")
 
 
 @router.callback_query(F.data == ADMIN_LIST_HIDDEN_CALLBACK)
@@ -287,7 +285,7 @@ async def admin_list_hidden_callback(
     await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_hidden_profiles(session)
-    await send_admin_profiles(callback.message, profiles, "Скрытых анкет нет.", state, "hidden")
+    await send_admin_profiles_page(callback.message, profiles, "Скрытых анкет нет.", state, "hidden")
 
 
 @router.callback_query(F.data == ADMIN_LIST_COMPLAINTS_CALLBACK)
@@ -302,7 +300,7 @@ async def admin_list_complaints_callback(
     await safe_callback_answer(callback)
     async with db.session() as session:
         profiles = await list_profiles_with_complaints(session)
-    await send_admin_profiles(callback.message, profiles, "Анкет с жалобами нет.", state, "complaints")
+    await send_admin_profiles_page(callback.message, profiles, "Анкет с жалобами нет.", state, "complaints")
 
 
 def parse_admin_complaints_payload(payload: str) -> tuple[int, int]:
@@ -336,11 +334,11 @@ async def admin_nav_next_callback(
 
     data = await state.get_data()
     scope = data.get(ADMIN_VIEW_SCOPE_KEY)
-    current_index = data.get(ADMIN_VIEW_INDEX_KEY)
+    current_offset = data.get(ADMIN_VIEW_OFFSET_KEY)
     if not isinstance(scope, str):
         scope = "all"
-    if not isinstance(current_index, int):
-        current_index = -1
+    if not isinstance(current_offset, int):
+        current_offset = 0
 
     async with db.session() as session:
         profiles, empty_text = await get_admin_profiles_by_scope(session, scope)
@@ -350,16 +348,63 @@ async def admin_nav_next_callback(
         await safe_answer(callback.message, empty_text)
         return
 
-    next_index = (current_index + 1) % len(profiles)
     await safe_callback_answer(callback)
-    await show_admin_profile(
+    next_offset = current_offset + BATCH_SIZE
+    if next_offset >= len(profiles):
+        await safe_answer(callback.message, "Это последняя страница списка.")
+        return
+    await send_admin_profiles_page(
         callback.message,
+        profiles,
+        empty_text,
         state,
-        profiles[next_index],
         scope,
-        next_index + 1,
-        len(profiles),
+        next_offset,
     )
+
+
+@router.callback_query(F.data == ADMIN_FIND_PROFILE_CALLBACK)
+async def admin_find_profile_callback(
+    callback: CallbackQuery,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if callback.message is None or not await ensure_admin_callback(callback, settings):
+        return
+    await state.clear()
+    await state.set_state(AdminFlow.waiting_for_profile_id)
+    await safe_callback_answer(callback)
+    await safe_answer(callback.message, "Отправьте ID анкеты цифрами.")
+
+
+@router.message(AdminFlow.waiting_for_profile_id, F.text)
+async def admin_find_profile_id_message(
+    message: Message,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await ensure_admin_message(message, settings):
+        await state.clear()
+        return
+    profile_id_text = message.text.strip()
+    if not profile_id_text.isdigit():
+        await safe_answer(message, "ID анкеты должен состоять из цифр. Попробуйте ещё раз.")
+        return
+
+    async with db.session() as session:
+        profile = await get_profile_with_owner(session, int(profile_id_text))
+    if profile is None:
+        await safe_answer(message, "Анкета с таким ID не найдена.")
+        return
+
+    await state.clear()
+    await show_admin_profile(message, profile, 1, 1)
+
+
+@router.message(AdminFlow.waiting_for_profile_id)
+async def admin_find_profile_invalid_message(message: Message) -> None:
+    await safe_answer(message, "Отправьте ID анкеты цифрами.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_COMPLAINTS_VIEW_PREFIX))
@@ -465,38 +510,112 @@ async def admin_broadcast_callback(
     await state.clear()
     await state.set_state(AdminFlow.waiting_for_broadcast)
     await safe_callback_answer(callback)
-    await safe_answer(callback.message, "Отправьте текст рассылки одним сообщением.")
+    await safe_answer(callback.message, "Отправьте текст или изображение с подписью для рассылки.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_DELETE_PROFILE_PREFIX))
 async def delete_profile_callback(
     callback: CallbackQuery,
-    db: Database,
     settings: Settings,
+    state: FSMContext,
 ) -> None:
     if callback.data is None or not await ensure_admin_callback(callback, settings):
         return
     profile_id = int(callback.data.removeprefix(ADMIN_DELETE_PROFILE_PREFIX))
-    async with db.session() as session:
-        success = await delete_profile(session, profile_id)
-    await safe_callback_answer(callback, "Анкета удалена." if success else "Анкета не найдена.")
+    await state.update_data(
+        **{
+            MODERATION_ACTION_KEY: "delete",
+            MODERATION_PROFILE_ID_KEY: profile_id,
+        }
+    )
+    await state.set_state(AdminFlow.waiting_for_moderation_reason)
+    await safe_callback_answer(callback)
+    if callback.message is not None:
+        await safe_answer(callback.message, "Напишите причину удаления анкеты. Она будет отправлена пользователю.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_BLOCK_USER_PREFIX))
 async def block_user_callback(
     callback: CallbackQuery,
-    db: Database,
     settings: Settings,
+    state: FSMContext,
 ) -> None:
     if callback.data is None or not await ensure_admin_callback(callback, settings):
         return
     user_id = int(callback.data.removeprefix(ADMIN_BLOCK_USER_PREFIX))
-    async with db.session() as session:
-        success = await set_user_blocked(session, user_id, True)
-    await safe_callback_answer(
-        callback,
-        "Пользователь заблокирован." if success else "Пользователь не найден."
+    await state.update_data(
+        **{
+            MODERATION_ACTION_KEY: "block",
+            MODERATION_USER_ID_KEY: user_id,
+        }
     )
+    await state.set_state(AdminFlow.waiting_for_moderation_reason)
+    await safe_callback_answer(callback)
+    if callback.message is not None:
+        await safe_answer(callback.message, "Напишите причину блокировки. Она будет отправлена пользователю.")
+
+
+@router.message(AdminFlow.waiting_for_moderation_reason, F.text)
+async def moderation_reason_message(
+    message: Message,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await ensure_admin_message(message, settings):
+        await state.set_state(None)
+        return
+    reason = message.text.strip()
+    if not reason:
+        await safe_answer(message, "Причина не должна быть пустой. Отправьте её текстом.")
+        return
+
+    data = await state.get_data()
+    action = data.get(MODERATION_ACTION_KEY)
+    telegram_id: int | None = None
+    success = False
+    if action == "delete" and isinstance(data.get(MODERATION_PROFILE_ID_KEY), int):
+        profile_id = data[MODERATION_PROFILE_ID_KEY]
+        async with db.session() as session:
+            profile = await get_profile_with_owner(session, profile_id)
+            if profile is not None and profile.user is not None:
+                telegram_id = profile.user.telegram_id
+            success = await delete_profile(session, profile_id)
+        result_text = "Анкета удалена." if success else "Анкета не найдена."
+        notification = f"Ваша анкета была удалена модерацией.\nПричина: {escape(reason)}"
+    elif action == "block" and isinstance(data.get(MODERATION_USER_ID_KEY), int):
+        user_id = data[MODERATION_USER_ID_KEY]
+        async with db.session() as session:
+            user = await get_user_by_id(session, user_id)
+            if user is not None:
+                telegram_id = user.telegram_id
+            success = await set_user_blocked(session, user_id, True)
+        result_text = "Пользователь заблокирован." if success else "Пользователь не найден."
+        notification = f"Ваш аккаунт был заблокирован модерацией.\nПричина: {escape(reason)}"
+    else:
+        await state.clear()
+        await safe_answer(message, "Не удалось определить действие модерации. Повторите его ещё раз.")
+        return
+
+    await state.update_data(
+        **{
+            MODERATION_ACTION_KEY: None,
+            MODERATION_PROFILE_ID_KEY: None,
+            MODERATION_USER_ID_KEY: None,
+        }
+    )
+    await state.set_state(None)
+    if success and telegram_id is not None:
+        try:
+            await safe_send_message(message.bot, telegram_id, notification)
+        except (TelegramForbiddenError, TelegramBadRequest):
+            logger.info("moderation_notification_failed telegram_id=%s", telegram_id)
+    await safe_answer(message, result_text)
+
+
+@router.message(AdminFlow.waiting_for_moderation_reason)
+async def moderation_reason_invalid_message(message: Message) -> None:
+    await safe_answer(message, "Отправьте причину обычным текстом.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_UNBLOCK_USER_PREFIX))
@@ -529,7 +648,7 @@ async def broadcast_text_message(
     if not broadcast_text:
         await safe_answer(message, "Текст рассылки не должен быть пустым.")
         return
-    await state.update_data(broadcast_text=broadcast_text)
+    await state.update_data(broadcast_text=broadcast_text, broadcast_photo_file_id=None)
     await state.set_state(AdminFlow.waiting_for_broadcast_confirm)
     await safe_answer(
         message,
@@ -538,9 +657,33 @@ async def broadcast_text_message(
     )
 
 
+@router.message(AdminFlow.waiting_for_broadcast, F.photo)
+async def broadcast_photo_message(
+    message: Message,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await ensure_admin_message(message, settings):
+        await state.clear()
+        return
+    photo = message.photo[-1]
+    caption = (message.caption or "").strip()
+    await state.update_data(
+        broadcast_text=caption,
+        broadcast_photo_file_id=photo.file_id,
+    )
+    await state.set_state(AdminFlow.waiting_for_broadcast_confirm)
+    await safe_answer_photo(
+        message,
+        photo.file_id,
+        caption=("<b>Предпросмотр рассылки:</b>\n\n" + caption) if caption else "<b>Предпросмотр рассылки</b>",
+        reply_markup=admin_broadcast_confirm_keyboard(),
+    )
+
+
 @router.message(AdminFlow.waiting_for_broadcast)
 async def invalid_broadcast_text_message(message: Message) -> None:
-    await safe_answer(message, "Отправьте текст рассылки одним сообщением.")
+    await safe_answer(message, "Отправьте текст или изображение с подписью для рассылки.")
 
 
 @router.callback_query(F.data == ADMIN_BROADCAST_CANCEL_CALLBACK)
@@ -576,7 +719,10 @@ async def broadcast_confirm_callback(
 
     data = await state.get_data()
     broadcast_text = data.get("broadcast_text")
-    if not isinstance(broadcast_text, str) or not broadcast_text.strip():
+    broadcast_photo_file_id = data.get("broadcast_photo_file_id")
+    if not isinstance(broadcast_text, str) or (
+        not broadcast_text.strip() and not isinstance(broadcast_photo_file_id, str)
+    ):
         await state.clear()
         await safe_callback_answer(callback)
         await safe_answer(callback.message, "Не найден текст рассылки. Запустите сценарий заново.")
@@ -589,7 +735,15 @@ async def broadcast_confirm_callback(
     failed_count = 0
     for index, telegram_id in enumerate(telegram_ids, start=1):
         try:
-            sent = await safe_send_message(callback.bot, telegram_id, broadcast_text)
+            if isinstance(broadcast_photo_file_id, str):
+                sent = await safe_send_photo(
+                    callback.bot,
+                    telegram_id,
+                    broadcast_photo_file_id,
+                    caption=broadcast_text or None,
+                )
+            else:
+                sent = await safe_send_message(callback.bot, telegram_id, broadcast_text)
             if sent is not None:
                 success_count += 1
             else:

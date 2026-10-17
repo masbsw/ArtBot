@@ -5,6 +5,7 @@ from app.keyboards.artist import (
     FORMAT_OPTIONS,
     build_option_keyboard,
 )
+from app.services.client_filters import ANY_DEADLINE_CATEGORY
 from app.services.artist_profiles import humanize_deadline_category
 
 CLIENT_FORMAT_CALLBACK_PREFIX = "client:format:"
@@ -37,12 +38,22 @@ def client_format_keyboard(current_value: str | None = None) -> InlineKeyboardMa
 
 
 def client_deadline_keyboard(current_value: str | None = None) -> InlineKeyboardMarkup:
-    return build_option_keyboard(
+    keyboard = build_option_keyboard(
         DEADLINE_CATEGORY_OPTIONS,
         CLIENT_DEADLINE_CALLBACK_PREFIX,
         current_value,
         label_getter=humanize_deadline_category,
     )
+    any_label = "Любой дедлайн •" if current_value == ANY_DEADLINE_CATEGORY else "Любой дедлайн"
+    keyboard.inline_keyboard.append(
+        [
+            InlineKeyboardButton(
+                text=any_label,
+                callback_data=f"{CLIENT_DEADLINE_CALLBACK_PREFIX}{ANY_DEADLINE_CATEGORY}",
+            )
+        ]
+    )
+    return keyboard
 
 
 def client_filters_actions_keyboard() -> InlineKeyboardMarkup:

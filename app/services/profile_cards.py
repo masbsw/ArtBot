@@ -36,9 +36,9 @@ def build_profile_caption(profile: ArtistProfile, title: str = "Моя анке�
     images_count = len(profile.portfolio_images)
     return (
         f"<b>{escape(title)}</b>\n\n"
+        f" Прайс: {escape(build_price_display(profile.price_text, profile.currency))}\n"
         f" Формат: {escape(humanize_format(profile.format))}\n"
         f" Описание: {escape(display_value(profile.description))}\n"
-        f" Прайс: {escape(build_price_display(profile.price_text, profile.currency))}\n"
         f" Сроки: {escape(humanize_deadline_category(profile.deadline_category))}\n\n"
         f"📩 Контакты: {escape(display_value(profile.contacts_text))}\n"
         f"❤️ Лайки: {profile.likes_count}\n"

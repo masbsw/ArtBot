@@ -243,6 +243,21 @@ async def safe_send_message(
     )
 
 
+async def safe_send_photo(
+    bot: Bot,
+    chat_id: int,
+    photo: str,
+    **kwargs: Any,
+) -> Message | None:
+    return await retry_telegram_request(
+        "bot.send_photo",
+        bot.send_photo,
+        chat_id,
+        photo,
+        **kwargs,
+    )
+
+
 async def safe_delete_message(
     bot: Bot,
     chat_id: int,

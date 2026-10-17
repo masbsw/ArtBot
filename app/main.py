@@ -6,6 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramNetworkError
+from aiogram.types import BotCommand
 
 from app.config import Settings, get_settings
 from app.db.session import Database
@@ -91,6 +92,21 @@ async def ensure_bot_ready(bot: Bot) -> None:
         await asyncio.sleep(delay)
 
 
+async def configure_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="start", description="Открыть меню"),
+            BotCommand(command="role", description="Сменить роль"),
+            BotCommand(command="rules", description="Правила"),
+            BotCommand(command="edit_profile", description="Изменить анкету"),
+            BotCommand(command="my_profile", description="Моя анкета"),
+            BotCommand(command="edit_filters", description="Фильтры"),
+            BotCommand(command="find_artists", description="Смотреть анкеты"),
+            BotCommand(command="saved_profiles", description="Сохраненные"),
+        ]
+    )
+
+
 async def run_polling(settings: Settings) -> None:
     database = Database(settings)
     dispatcher = setup_dispatcher()
@@ -102,6 +118,7 @@ async def run_polling(settings: Settings) -> None:
             bot = create_bot(settings)
             try:
                 await ensure_bot_ready(bot)
+                await configure_bot_commands(bot)
                 logger.info("Starting polling loop")
                 await dispatcher.start_polling(bot, settings=settings, db=database)
                 logger.info("Polling exited without network error")

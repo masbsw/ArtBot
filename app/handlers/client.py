@@ -36,6 +36,7 @@ from app.keyboards.client import (
 )
 from app.services.artist_profiles import humanize_deadline_category
 from app.services.client_filters import (
+    display_deadline_filter,
     get_client_filter,
     upsert_client_filter,
 )
@@ -118,7 +119,7 @@ def build_filters_text(client_filter) -> str:
     return (
         "<b>Мои фильтры</b>\n\n"
         f"<b>Формат:</b> {escape(client_filter.format or 'Не указано')}\n"
-        f"<b>Сроки:</b> {escape(humanize_deadline_category(client_filter.deadline_category))}"
+        f"<b>Сроки:</b> {escape(display_deadline_filter(client_filter.deadline_category))}"
     )
 
 
@@ -614,7 +615,7 @@ async def set_client_deadline(
     await state.update_data(deadline_category=value)
     await safe_edit_text(
         callback.message,
-        f"Шаг 2 из 2. Сроки: <b>{escape(humanize_deadline_category(value))}</b>."
+        f"Шаг 2 из 2. Сроки: <b>{escape(display_deadline_filter(value))}</b>."
     )
     data = await state.get_data()
 

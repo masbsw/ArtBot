@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models import ArtistProfile, ArtistProfileStatus, PortfolioImage
 
 MAX_PORTFOLIO_IMAGES = 2
+MAX_ARTIST_DESCRIPTION_LENGTH = 500
 
 FORMAT_LABELS: dict[str, str] = {
     "digital": "digital",

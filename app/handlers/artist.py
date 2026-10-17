@@ -36,6 +36,7 @@ from app.keyboards.artist import (
 )
 from app.services.artist_profiles import (
     MAX_PORTFOLIO_IMAGES,
+    MAX_ARTIST_DESCRIPTION_LENGTH,
     contacts_have_links,
     disable_artist_profile,
     get_artist_profile,
@@ -169,14 +170,14 @@ async def prompt_description_step(message: Message, state: FSMContext) -> None:
     if await can_cancel_current_edit(state):
         await safe_fsm_answer(
             message,
-            "Шаг 5 из 7. Напишите краткое описание себя и услуг.\n"
+            f"Шаг 5 из 7. Напишите краткое описание себя и услуг (до {MAX_ARTIST_DESCRIPTION_LENGTH} символов).\n"
             "Отправь новый текст или нажми ❌ Отменить.",
             reply_markup=cancel_reply_keyboard(),
         )
         return
     await safe_fsm_answer(
         message,
-        "Шаг 5 из 7. Напишите краткое описание себя и услуг.",
+        f"Шаг 5 из 7. Напишите краткое описание себя и услуг (до {MAX_ARTIST_DESCRIPTION_LENGTH} символов).",
     )
 
 
@@ -532,12 +533,15 @@ async def prompt_selected_field(
             if await can_cancel_current_edit(state):
                 await safe_fsm_answer(
                     target_message,
-                    "Отправьте новое описание.\n"
+                    f"Отправьте новое описание (до {MAX_ARTIST_DESCRIPTION_LENGTH} символов).\n"
                     "Отправь новый текст или нажми ❌ Отменить.",
                     reply_markup=cancel_reply_keyboard(),
                 )
             else:
-                await safe_fsm_answer(target_message, "Отправьте новое описание.")
+                await safe_fsm_answer(
+                    target_message,
+                    f"Отправьте новое описание (до {MAX_ARTIST_DESCRIPTION_LENGTH} символов).",
+                )
         return
     if field_name == "price":
         await state.set_state(ArtistFlow.waiting_for_currency)
@@ -890,6 +894,12 @@ async def set_description(message: Message, state: FSMContext, db: Database) -> 
     description = message.text.strip()
     if not description:
         await safe_fsm_answer(message, "Описание не должно быть пустым.")
+        return
+    if len(description) > MAX_ARTIST_DESCRIPTION_LENGTH:
+        await safe_fsm_answer(
+            message,
+            f"Описание слишком длинное. Максимум {MAX_ARTIST_DESCRIPTION_LENGTH} символов, сейчас: {len(description)}.",
+        )
         return
     await state.update_data(description=description)
     data = await state.get_data()

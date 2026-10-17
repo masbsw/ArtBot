@@ -9,7 +9,8 @@ ADMIN_BLOCK_USER_PREFIX = "admin:block:"
 ADMIN_UNBLOCK_USER_PREFIX = "admin:unblock:"
 ADMIN_BROADCAST_CONFIRM_CALLBACK = "admin:broadcast:confirm"
 ADMIN_BROADCAST_CANCEL_CALLBACK = "admin:broadcast:cancel"
-ADMIN_NEXT_CALLBACK = "admin:next"
+ADMIN_NEXT_CALLBACK = "admin:page:next"
+ADMIN_FIND_PROFILE_CALLBACK = "admin:find_profile"
 ADMIN_COMPLAINTS_VIEW_PREFIX = "admin:complaints:view:"
 ADMIN_COMPLAINTS_PREV_PREFIX = "admin:complaints:prev:"
 ADMIN_COMPLAINTS_NEXT_PREFIX = "admin:complaints:next:"
@@ -42,6 +43,12 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
                     callback_data=ADMIN_BROADCAST_CALLBACK,
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="🔢 Найти анкету по ID",
+                    callback_data=ADMIN_FIND_PROFILE_CALLBACK,
+                )
+            ],
         ]
     )
 
@@ -49,15 +56,20 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
 def admin_profile_actions_keyboard(
     profile_id: int,
     user_id: int,
+    complaints_count: int = 0,
 ) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    rows = []
+    if complaints_count > 0:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text="Следующая ➡️",
-                    callback_data=ADMIN_NEXT_CALLBACK,
+                    text="📄 Жалобы",
+                    callback_data=f"{ADMIN_COMPLAINTS_VIEW_PREFIX}{profile_id}:0",
                 )
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="❌ Удалить",
@@ -70,6 +82,24 @@ def admin_profile_actions_keyboard(
                     callback_data=f"{ADMIN_BLOCK_USER_PREFIX}{user_id}",
                 )
             ],
+        ]
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=rows
+    )
+
+
+def admin_page_navigation_keyboard(has_next_page: bool) -> InlineKeyboardMarkup | None:
+    if not has_next_page:
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Следующие 10 ➡️",
+                    callback_data=ADMIN_NEXT_CALLBACK,
+                )
+            ]
         ]
     )
 

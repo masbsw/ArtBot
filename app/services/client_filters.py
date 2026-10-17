@@ -4,6 +4,18 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models import ArtistProfile, ArtistProfileStatus, ClientFilter
 
+ANY_DEADLINE_CATEGORY = "any"
+
+
+def is_any_deadline_category(value: str | None) -> bool:
+    return value == ANY_DEADLINE_CATEGORY
+
+
+def display_deadline_filter(value: str | None) -> str:
+    if is_any_deadline_category(value):
+        return "Любой дедлайн"
+    return value or "Не указано"
+
 
 async def get_client_filter(
     session: AsyncSession,
@@ -38,12 +50,15 @@ async def find_matching_artist_profile(
     session: AsyncSession,
     client_filter: ClientFilter,
 ) -> ArtistProfile | None:
-    result = await session.execute(
+    query = (
         select(ArtistProfile)
         .options(selectinload(ArtistProfile.portfolio_images))
         .where(ArtistProfile.status == ArtistProfileStatus.ACTIVE)
         .where(ArtistProfile.format == client_filter.format)
-        .where(ArtistProfile.deadline_category == client_filter.deadline_category)
         .order_by(ArtistProfile.id.asc())
     )
+    if not is_any_deadline_category(client_filter.deadline_category):
+        query = query.where(ArtistProfile.deadline_category == client_filter.deadline_category)
+
+    result = await session.execute(query)
     return result.scalars().unique().first()
