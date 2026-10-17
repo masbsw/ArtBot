@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -55,6 +57,66 @@ async def list_profiles_with_complaints(session: AsyncSession) -> list[ArtistPro
         .where(ArtistProfile.complaints_count > 0)
         .order_by(ArtistProfile.complaints_count.desc(), ArtistProfile.id.desc())
     )
+    return list(result.scalars().unique())
+
+
+async def list_recent_profiles(session: AsyncSession) -> list[ArtistProfile]:
+    since = datetime.now(timezone.utc) - timedelta(days=7)
+    result = await session.execute(
+        select(ArtistProfile)
+        .options(
+            selectinload(ArtistProfile.portfolio_images),
+            joinedload(ArtistProfile.user),
+        )
+        .where(
+            ArtistProfile.status == ArtistProfileStatus.ACTIVE,
+            ArtistProfile.created_at >= since,
+        )
+        .order_by(ArtistProfile.created_at.desc())
+    )
+    return list(result.scalars().unique())
+
+
+async def list_profiles_without_images(session: AsyncSession) -> list[ArtistProfile]:
+    result = await session.execute(
+        select(ArtistProfile)
+        .options(
+            selectinload(ArtistProfile.portfolio_images),
+            joinedload(ArtistProfile.user),
+        )
+        .where(
+            ArtistProfile.status == ArtistProfileStatus.ACTIVE,
+            ~ArtistProfile.portfolio_images.any(),
+        )
+        .order_by(ArtistProfile.id.desc())
+    )
+    return list(result.scalars().unique())
+
+
+async def search_admin_profiles(
+    session: AsyncSession,
+    query: str,
+    limit: int = 20,
+) -> list[ArtistProfile]:
+    normalized_query = query.strip()
+    statement = select(ArtistProfile).join(ArtistProfile.user).options(
+        selectinload(ArtistProfile.portfolio_images),
+        joinedload(ArtistProfile.user),
+    )
+
+    if normalized_query.startswith("#") and normalized_query[1:].isdigit():
+        statement = statement.where(ArtistProfile.id == int(normalized_query[1:]))
+    elif normalized_query.lower().startswith("user:") and normalized_query[5:].strip().isdigit():
+        statement = statement.where(ArtistProfile.user_id == int(normalized_query[5:].strip()))
+    elif normalized_query.startswith("@"):
+        statement = statement.where(func.lower(User.username) == normalized_query[1:].lower())
+    else:
+        pattern = f"%{normalized_query}%"
+        statement = statement.where(
+            ArtistProfile.contacts_text.ilike(pattern) | User.username.ilike(pattern)
+        )
+
+    result = await session.execute(statement.order_by(ArtistProfile.id.desc()).limit(limit))
     return list(result.scalars().unique())
 
 

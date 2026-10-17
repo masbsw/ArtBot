@@ -23,6 +23,8 @@ from app.keyboards.admin import (
     ADMIN_LIST_ALL_CALLBACK,
     ADMIN_LIST_COMPLAINTS_CALLBACK,
     ADMIN_LIST_HIDDEN_CALLBACK,
+    ADMIN_LIST_NO_PHOTOS_CALLBACK,
+    ADMIN_LIST_RECENT_CALLBACK,
     ADMIN_NEXT_CALLBACK,
     ADMIN_UNBLOCK_USER_PREFIX,
     admin_complaints_navigation_keyboard,
@@ -40,7 +42,10 @@ from app.services.admin_profiles import (
     list_profile_complaints,
     list_all_profiles,
     list_hidden_profiles,
+    list_profiles_without_images,
+    list_recent_profiles,
     list_profiles_with_complaints,
+    search_admin_profiles,
     set_user_blocked,
 )
 from app.services.profile_cards import build_profile_caption
@@ -102,6 +107,10 @@ async def get_admin_profiles_by_scope(
         return await list_all_profiles(session), "Анкет пока нет."
     if scope == "hidden":
         return await list_hidden_profiles(session), "Скрытых анкет нет."
+    if scope == "recent":
+        return await list_recent_profiles(session), "За последние 7 дней анкет не было."
+    if scope == "no_photos":
+        return await list_profiles_without_images(session), "Анкет без фото нет."
     return await list_profiles_with_complaints(session), "Анкет с жалобами нет."
 
 
@@ -303,6 +312,36 @@ async def admin_list_complaints_callback(
     await send_admin_profiles_page(callback.message, profiles, "Анкет с жалобами нет.", state, "complaints")
 
 
+@router.callback_query(F.data == ADMIN_LIST_RECENT_CALLBACK)
+async def admin_list_recent_callback(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if callback.message is None or not await ensure_admin_callback(callback, settings):
+        return
+    await safe_callback_answer(callback)
+    async with db.session() as session:
+        profiles = await list_recent_profiles(session)
+    await send_admin_profiles_page(callback.message, profiles, "За последние 7 дней анкет не было.", state, "recent")
+
+
+@router.callback_query(F.data == ADMIN_LIST_NO_PHOTOS_CALLBACK)
+async def admin_list_no_photos_callback(
+    callback: CallbackQuery,
+    db: Database,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if callback.message is None or not await ensure_admin_callback(callback, settings):
+        return
+    await safe_callback_answer(callback)
+    async with db.session() as session:
+        profiles = await list_profiles_without_images(session)
+    await send_admin_profiles_page(callback.message, profiles, "Анкет без фото нет.", state, "no_photos")
+
+
 def parse_admin_complaints_payload(payload: str) -> tuple[int, int]:
     profile_id, offset = payload.split(":", maxsplit=1)
     return int(profile_id), int(offset)
@@ -372,13 +411,20 @@ async def admin_find_profile_callback(
     if callback.message is None or not await ensure_admin_callback(callback, settings):
         return
     await state.clear()
-    await state.set_state(AdminFlow.waiting_for_profile_id)
+    await state.set_state(AdminFlow.waiting_for_profile_search)
     await safe_callback_answer(callback)
-    await safe_answer(callback.message, "Отправьте ID анкеты цифрами.")
+    await safe_answer(
+        callback.message,
+        "Отправьте один вариант поиска:\n"
+        "• <code>#123</code> — ID анкеты\n"
+        "• <code>user:600</code> — внутренний User ID\n"
+        "• <code>@username</code> — username\n"
+        "• обычный текст — фрагмент контактов",
+    )
 
 
-@router.message(AdminFlow.waiting_for_profile_id, F.text)
-async def admin_find_profile_id_message(
+@router.message(AdminFlow.waiting_for_profile_search, F.text)
+async def admin_find_profile_message(
     message: Message,
     db: Database,
     settings: Settings,
@@ -387,24 +433,26 @@ async def admin_find_profile_id_message(
     if not await ensure_admin_message(message, settings):
         await state.clear()
         return
-    profile_id_text = message.text.strip()
-    if not profile_id_text.isdigit():
-        await safe_answer(message, "ID анкеты должен состоять из цифр. Попробуйте ещё раз.")
+    search_query = message.text.strip()
+    if len(search_query) < 2:
+        await safe_answer(message, "Введите минимум два символа для поиска.")
         return
 
     async with db.session() as session:
-        profile = await get_profile_with_owner(session, int(profile_id_text))
-    if profile is None:
-        await safe_answer(message, "Анкета с таким ID не найдена.")
+        profiles = await search_admin_profiles(session, search_query)
+    if not profiles:
+        await safe_answer(message, "По этому запросу анкеты не найдены.")
         return
 
     await state.clear()
-    await show_admin_profile(message, profile, 1, 1)
+    await safe_answer(message, f"Найдено анкет: {len(profiles)} (максимум 20).")
+    for index, profile in enumerate(profiles, start=1):
+        await show_admin_profile(message, profile, index, len(profiles))
 
 
-@router.message(AdminFlow.waiting_for_profile_id)
+@router.message(AdminFlow.waiting_for_profile_search)
 async def admin_find_profile_invalid_message(message: Message) -> None:
-    await safe_answer(message, "Отправьте ID анкеты цифрами.")
+    await safe_answer(message, "Отправьте запрос обычным текстом.")
 
 
 @router.callback_query(F.data.startswith(ADMIN_COMPLAINTS_VIEW_PREFIX))

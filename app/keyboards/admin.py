@@ -11,6 +11,8 @@ ADMIN_BROADCAST_CONFIRM_CALLBACK = "admin:broadcast:confirm"
 ADMIN_BROADCAST_CANCEL_CALLBACK = "admin:broadcast:cancel"
 ADMIN_NEXT_CALLBACK = "admin:page:next"
 ADMIN_FIND_PROFILE_CALLBACK = "admin:find_profile"
+ADMIN_LIST_RECENT_CALLBACK = "admin:view_recent_profiles"
+ADMIN_LIST_NO_PHOTOS_CALLBACK = "admin:view_profiles_without_photos"
 ADMIN_COMPLAINTS_VIEW_PREFIX = "admin:complaints:view:"
 ADMIN_COMPLAINTS_PREV_PREFIX = "admin:complaints:prev:"
 ADMIN_COMPLAINTS_NEXT_PREFIX = "admin:complaints:next:"
@@ -45,9 +47,19 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text="🔢 Найти анкету по ID",
+                    text="🔍 Найти анкету",
                     callback_data=ADMIN_FIND_PROFILE_CALLBACK,
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🆕 Новые за 7 дней",
+                    callback_data=ADMIN_LIST_RECENT_CALLBACK,
+                ),
+                InlineKeyboardButton(
+                    text="🖼 Без фото",
+                    callback_data=ADMIN_LIST_NO_PHOTOS_CALLBACK,
+                ),
             ],
         ]
     )
